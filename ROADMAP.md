@@ -93,10 +93,11 @@ Readiness evidence: local credentials and runtime state resolve outside the repo
 
 - [x] Represent work as a typed dependency DAG.
 - [x] Assign non-overlapping file scopes to prospective parallel workers.
+- [x] Bind trusted changed paths to each task's declared ownership before execution authority.
 - [ ] Add an integration worker for dependent or conflicting changes.
 - [ ] Bound fan-out, retries, runtime, and subscription usage.
 
-M5 DAG-contract evidence: version 1 remains readable and bounds task content/count, requires stable IDs and acceptance criteria, and rejects duplicate IDs/edges, missing targets, self-dependencies, and cycles. Version 2 adds literal file, directory-subtree, or repository-wide ownership; rejects ambiguous paths and redundant scopes; and permits overlap only when a transitive dependency orders the tasks. The deterministic readiness projection preserves declared order and explicitly grants no execution authority, fan-out, workspace lease, retry, or token spend.
+M5 DAG-contract evidence: version 1 remains readable and bounds task content/count, requires stable IDs and acceptance criteria, and rejects duplicate IDs/edges, missing targets, self-dependencies, and cycles. Version 2 adds literal file, directory-subtree, or repository-wide ownership; rejects ambiguous paths and redundant scopes; and permits overlap only when a transitive dependency orders the tasks. The deterministic readiness projection preserves declared order and explicitly grants no execution authority, fan-out, workspace lease, retry, or token spend. A separate typed disposition binds trusted Git changed paths to one version 2 task: exact file and directory-subtree ownership is enforced, invalid, duplicate, and outside-scope paths remain visible as deterministic violations, and unknown tasks or over-broad input fail closed. The disposition is evidence only and grants no execution capability.
 
 ### M6 — Multi-repository change sets — `PLANNED`
 
