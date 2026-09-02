@@ -25,6 +25,7 @@
 		"auth:codex": "node scripts/with-local-runtime.mjs tsx scripts/auth-login.ts openai-codex",
 		"auth:copilot": "node scripts/with-local-runtime.mjs tsx scripts/auth-login.ts github-copilot",
 		"auth:status": "node scripts/with-local-runtime.mjs node scripts/auth-status.mjs",
+		"migrate:local-operator": "tsx scripts/migrate-local-operator.ts",
 		"agent:codex": "node scripts/with-local-runtime.mjs flue run src/agents/codex.ts",
 		"agent:copilot": "node scripts/with-local-runtime.mjs flue run src/agents/copilot.ts",
 		"agent:bobsled": "node scripts/with-local-runtime.mjs flue run src/agents/bobsled.ts"

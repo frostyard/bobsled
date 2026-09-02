@@ -34,6 +34,7 @@ Linux is the canonical production runtime. Multi-repository changes are a first-
 - [x] Disabled-by-default GitHub operator authentication with organization membership checks and durable sessions.
 - [x] Repository-scoped installation-token profiles and a policy-first label/comment outbox.
 - [x] Define a public-safe Caddy TLS boundary, raw-agent-route denial, and fail-closed activation sequence for the production hostname.
+- [x] Preserve local-trusted history through an explicit, conflict-checked, audited GitHub-principal cutover.
 - [ ] Complete the external HTTPS webhook and operator-authentication setup.
 - [ ] Live-prove label/comment writes for an explicitly authorized repository while code publication remains disabled.
 
