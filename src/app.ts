@@ -16,7 +16,7 @@ import {
 	GitHubActionPolicyBlockedError,
 	GitHubActionUpstreamError,
 } from './control-plane/github-actions.ts';
-import { GitHubInstallationConfigurationError } from './control-plane/github-installation.ts';
+import { auditGitHubPermissions, GitHubInstallationConfigurationError } from './control-plane/github-installation.ts';
 import {
 	githubEventStore,
 } from './control-plane/github-events.ts';
@@ -139,6 +139,7 @@ app.get('/', (context) => {
 
 app.get('/api/repositories', (context) => context.json(repositories));
 app.get('/api/github-app/status', (context) => context.json({ ...githubAppStatus(), webhooks: githubEventStore.metrics() }));
+app.get('/api/github-app/authority', (context) => context.json(auditGitHubPermissions(githubEventStore.latestInstallationSnapshot())));
 app.get('/api/operator-auth/status', (context) => context.json(operatorAuthStatus()));
 app.get('/api/observability/status', (context) => context.json(flueObservationStore.metrics()));
 

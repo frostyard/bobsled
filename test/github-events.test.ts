@@ -37,6 +37,20 @@ test('admits a verified delivery once and snapshots installation authority', () 
 			installationSnapshots: 1,
 			lastReceivedAt: '2026-09-01T12:00:00.000Z',
 		});
+		assert.deepEqual(store.latestInstallationSnapshot(), {
+			repositorySelection: 'selected',
+			permissions: { issues: 'write', contents: 'read' },
+			recordedAt: '2026-09-01T12:00:00.000Z',
+		});
+	} finally {
+		store.close();
+	}
+});
+
+test('reports no installation authority before a verified snapshot exists', () => {
+	const store = new GitHubEventStore(':memory:');
+	try {
+		assert.equal(store.latestInstallationSnapshot(), undefined);
 	} finally {
 		store.close();
 	}

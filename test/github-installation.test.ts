@@ -1,11 +1,39 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+	auditGitHubPermissions,
 	GitHubInstallationAuthority,
 	GitHubInstallationConfigurationError,
 	GitHubInstallationScopeError,
 	type ScopedInstallationAuthority,
 } from '../src/control-plane/github-installation.ts';
+
+test('audits verified installation permissions against the declared capability ceiling', () => {
+	assert.deepEqual(auditGitHubPermissions(), { status: 'unobserved', excessPermissions: [] });
+	assert.deepEqual(auditGitHubPermissions({
+		repositorySelection: 'all',
+		permissions: { metadata: 'read', issues: 'write', contents: 'read' },
+		recordedAt: '2026-09-02T19:00:00.000Z',
+	}), {
+		status: 'within_policy',
+		repositorySelection: 'all',
+		observedAt: '2026-09-02T19:00:00.000Z',
+		excessPermissions: [],
+	});
+	assert.deepEqual(auditGitHubPermissions({
+		repositorySelection: 'all',
+		permissions: { workflows: 'write', checks: 'write', metadata: 'read' },
+		recordedAt: '2026-09-02T19:00:00.000Z',
+	}), {
+		status: 'exceeds_policy',
+		repositorySelection: 'all',
+		observedAt: '2026-09-02T19:00:00.000Z',
+		excessPermissions: [
+			{ name: 'checks', granted: 'write', maximum: 'read' },
+			{ name: 'workflows', granted: 'write', maximum: undefined },
+		],
+	});
+});
 
 const environment = {
 	BOBSLED_GITHUB_APP_ID: '123',
