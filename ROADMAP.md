@@ -33,6 +33,7 @@ Linux is the canonical production runtime. Multi-repository changes are a first-
 - [x] Complete in-process Flue observation retention with aggregate-only HTTP status.
 - [x] Disabled-by-default GitHub operator authentication with organization membership checks and durable sessions.
 - [x] Repository-scoped installation-token profiles and a policy-first label/comment outbox.
+- [x] Define a public-safe Caddy TLS boundary, raw-agent-route denial, and fail-closed activation sequence for the production hostname.
 - [ ] Complete the external HTTPS webhook and operator-authentication setup.
 - [ ] Live-prove label/comment writes for an explicitly authorized repository while code publication remains disabled.
 
@@ -108,6 +109,7 @@ M5 DAG-contract evidence: the versioned runtime schema bounds task content and c
 - Models cannot select arbitrary repositories or mutate repository policy.
 - Raw Flue observations and verified webhook bodies are sensitive operational records and are not exposed through a content API.
 - No automated merge, release, branch-protection change, or quality-gate weakening.
+- Public ingress keeps its private Incus upstream as a rollback path; changing the host's live Ethernet topology is outside the application milestone.
 
 ## Prime Directive — preserve optionality
 

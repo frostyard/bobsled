@@ -155,11 +155,24 @@ test('GitHub mode redirects the UI and rejects unauthenticated APIs', async () =
 		assert.equal(page.headers.get('location'), '/auth/github/login');
 		const api = await app.request('https://factory.example/api/repositories');
 		assert.equal(api.status, 401);
+		const rawAgent = await app.request('https://factory.example/agents/bobsled');
+		assert.equal(rawAgent.status, 401);
 		const login = await app.request('https://factory.example/auth/github/login');
 		assert.equal(login.status, 302);
 		assert.match(login.headers.get('location') ?? '', /^https:\/\/github\.com\/login\/oauth\/authorize\?/);
 		assert.match(login.headers.get('set-cookie') ?? '', /HttpOnly/);
 		assert.match(login.headers.get('set-cookie') ?? '', /Secure/);
+	});
+});
+
+test('GitHub mode exposes only the bounded unauthenticated ingress paths', async () => {
+	await withGitHubAuthEnvironment(async () => {
+		assert.equal((await app.request('https://factory.example/health')).status, 200);
+		assert.equal((await app.request('https://factory.example/api/github-app/status')).status, 200);
+		assert.equal((await app.request('https://factory.example/api/operator-auth/status')).status, 200);
+		assert.equal((await app.request('https://factory.example/auth/github/callback')).status, 400);
+		assert.equal((await app.request('https://factory.example/api/observability/status')).status, 401);
+		assert.equal((await app.request('https://factory.example/api/operator-board')).status, 401);
 	});
 });
 

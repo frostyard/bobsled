@@ -38,6 +38,34 @@ GitHub integration requires a stable HTTPS origin and a narrowly configured reve
 
 Webhook admission must remain unavailable until a protected webhook secret is configured. GitHub operator mode must fail closed until its client credentials, session secret, and exact HTTPS public origin are all valid.
 
+### Caddy reference boundary
+
+[`deploy/caddy/Caddyfile.example`](../deploy/caddy/Caddyfile.example) is the reviewed reference for `bobsled.frostyard.org`. It deliberately:
+
+- lets Caddy own public TLS and certificate renewal;
+- proxies to a private-network `BOBSLED_UPSTREAM` rather than embedding deployment-specific addressing in source;
+- returns `404` for `/agents` and `/agents/*` before a request can reach Flue's raw agent routes;
+- sends every remaining request to Bobsled, where the GitHub session boundary protects the board and control-plane API; and
+- uses `/health` only as an upstream liveness check.
+
+Caddy sets `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` for HTTP upstreams by default and ignores spoofed inbound values unless another proxy has explicitly been trusted. Do not replace those defaults with client-supplied forwarding headers. Do not enable unredacted access logging: the OAuth callback query contains short-lived authorization material, and webhook headers contain signature evidence.
+
+Keep the current private endpoint working during activation. A host Ethernet bridge is not required for this topology; changing the host's live uplink is a separate, console-backed infrastructure migration with an independent rollback plan.
+
+### Fail-closed activation order
+
+1. Confirm the private upstream responds to `GET /health`; do not remove the existing Incus proxy or other known-good route.
+2. Store a new, random `BOBSLED_SESSION_SECRET` of at least 32 bytes in protected service configuration. Never put it in source, the Caddyfile, shell arguments, logs, or chat.
+3. Set `BOBSLED_PUBLIC_ORIGIN=https://bobsled.frostyard.org` and `BOBSLED_OPERATOR_AUTH_MODE=github` alongside the already-protected GitHub client credentials.
+4. Register exactly `https://bobsled.frostyard.org/auth/github/callback` as the GitHub App callback URL.
+5. Configure `BOBSLED_UPSTREAM` for the Caddy service with the private endpoint, import the reference site block, and validate the complete Caddy configuration before reload.
+6. Restart Bobsled while it is still reachable only through the private route. Verify `/health` reports operator mode `github`; an incomplete configuration must instead report `github_unconfigured` and fail protected routes closed.
+7. Reload Caddy, then prove that HTTPS is valid, `/` redirects an unauthenticated browser to GitHub, `/api/repositories` returns `401` without a session, and `/agents/bobsled` returns `404` at ingress.
+8. Complete an interactive login with an active `frostyard` member and verify a protected read-only request plus logout. Keep the prior Caddy configuration and Bobsled release available for rollback until this succeeds.
+9. Configure the GitHub App webhook URL as `https://bobsled.frostyard.org/channels/github/webhook` only after its matching protected webhook secret is installed. Prove a GitHub `ping`, a deduplicated delivery, and a rejected invalid signature before enabling event-driven dispatch.
+
+The OAuth proof requires a human browser, and the webhook secret must be entered independently into GitHub and protected host configuration. Neither value belongs in repository history or command output.
+
 ## Subscription authentication
 
 Each host authenticates Codex and Copilot independently. Never copy `auth.json` between development and production: two hosts refreshing cloned OAuth state can invalidate one another.
