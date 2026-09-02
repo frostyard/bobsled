@@ -47,6 +47,8 @@ The registered callback URL must be `<public-origin>/auth/github/callback`. Supp
 
 `GET /api/github-app/status` reports only whether required configuration is present. Supply credentials through the deployment's protected secret store; do not put them in source, shell commands, or chat.
 
+Prefer `BOBSLED_GITHUB_PRIVATE_KEY_FILE` over inline `BOBSLED_GITHUB_PRIVATE_KEY` in deployed services. Store the complete downloaded PEM as a separate root-owned file readable by the service group. A configured file path is authoritative and fails closed when unreadable; Bobsled never falls back to stale inline key material. This avoids dotenv quoting errors and prevents systemd from treating PEM continuation lines as separate environment assignments.
+
 The receiver is implemented at `POST /channels/github/webhook` but stays unavailable until `BOBSLED_GITHUB_WEBHOOK_SECRET` is supplied through protected deployment configuration. The official `@flue/github` channel owns JSON admission, exact-byte HMAC verification, GitHub event typing, and ping acknowledgement. A bounded project-owned wrapper retains the same exact bytes and atomically claims the verified delivery in Bobsled's store. Unknown valid event names are recorded with `ignored` status so GitHub can evolve without causing retries or accidental execution. No admitted webhook currently dispatches an agent or performs a GitHub write.
 
 The generated blueprint's single `GITHUB_TOKEN` and direct comment tool are intentionally not used. Outbound authority remains the repository-ID-scoped GitHub App broker and durable action outbox described below.

@@ -1,4 +1,5 @@
 import { createAppAuth, type InstallationAccessTokenAuthentication } from '@octokit/auth-app';
+import { resolveGitHubPrivateKey, type PrivateKeyReader } from './github-app.ts';
 import { getRepository } from './repositories.ts';
 
 const permissionProfiles = {
@@ -15,6 +16,7 @@ export interface GitHubInstallationEnvironment {
 	BOBSLED_GITHUB_APP_ID?: string;
 	BOBSLED_GITHUB_INSTALLATION_ID?: string;
 	BOBSLED_GITHUB_PRIVATE_KEY?: string;
+	BOBSLED_GITHUB_PRIVATE_KEY_FILE?: string;
 }
 
 export interface ScopedInstallationAuthority {
@@ -37,10 +39,6 @@ function positiveInteger(value: string | undefined): number | undefined {
 	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function normalizedPrivateKey(value: string | undefined): string | undefined {
-	return value?.replace(/\\n/g, '\n');
-}
-
 /**
  * Mints the narrowest short-lived token inside a callback so credentials do
  * not become durable application data or escape into model-visible state.
@@ -49,11 +47,18 @@ export class GitHubInstallationAuthority {
 	readonly #environment: GitHubInstallationEnvironment;
 	readonly #createAuth: CreateAuth;
 	readonly #fetch: typeof fetch;
+	readonly #readPrivateKey?: PrivateKeyReader;
 
-	constructor(environment: GitHubInstallationEnvironment = process.env, createAuth: CreateAuth = createAppAuth, request: typeof fetch = fetch) {
+	constructor(
+		environment: GitHubInstallationEnvironment = process.env,
+		createAuth: CreateAuth = createAppAuth,
+		request: typeof fetch = fetch,
+		readPrivateKey?: PrivateKeyReader,
+	) {
 		this.#environment = environment;
 		this.#createAuth = createAuth;
 		this.#fetch = request;
+		this.#readPrivateKey = readPrivateKey;
 	}
 
 	async withRequest<T>(
@@ -67,7 +72,7 @@ export class GitHubInstallationAuthority {
 		}
 		const appId = positiveInteger(this.#environment.BOBSLED_GITHUB_APP_ID);
 		const installationId = positiveInteger(this.#environment.BOBSLED_GITHUB_INSTALLATION_ID);
-		const privateKey = normalizedPrivateKey(this.#environment.BOBSLED_GITHUB_PRIVATE_KEY);
+		const privateKey = resolveGitHubPrivateKey(this.#environment, this.#readPrivateKey);
 		if (!appId || !installationId || !privateKey) {
 			throw new GitHubInstallationConfigurationError('GitHub App installation authority is not configured');
 		}

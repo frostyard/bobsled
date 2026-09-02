@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { githubAppStatus, verifyGitHubWebhook } from '../src/control-plane/github-app.ts';
+import { githubAppStatus, resolveGitHubPrivateKey, verifyGitHubWebhook } from '../src/control-plane/github-app.ts';
 
 test('verifies GitHub official webhook signature vector', () => {
 	const payload = new TextEncoder().encode('Hello, World!');
@@ -25,4 +25,16 @@ test('readiness exposes only credential presence', () => {
 		readyForApi: true,
 		readyForWebhooks: false,
 	});
+});
+
+test('a protected private-key file is authoritative and fails closed when unreadable', () => {
+	const environment = {
+		BOBSLED_GITHUB_APP_ID: 'configured',
+		BOBSLED_GITHUB_INSTALLATION_ID: 'configured',
+		BOBSLED_GITHUB_PRIVATE_KEY: 'stale-inline-key',
+		BOBSLED_GITHUB_PRIVATE_KEY_FILE: '/protected/github-app.pem',
+	};
+	assert.equal(resolveGitHubPrivateKey(environment, () => '  complete-file-key\n'), 'complete-file-key');
+	assert.equal(resolveGitHubPrivateKey(environment, () => { throw new Error('unreadable'); }), undefined);
+	assert.equal(githubAppStatus(environment, () => { throw new Error('unreadable'); }).readyForApi, false);
 });
