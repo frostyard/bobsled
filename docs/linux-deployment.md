@@ -66,6 +66,18 @@ Keep the current private endpoint working during activation. A host Ethernet bri
 
 The OAuth proof requires a human browser, and the webhook secret must be entered independently into GitHub and protected host configuration. Neither value belongs in repository history or command output.
 
+### Local-trusted history cutover
+
+A deployment that previously admitted work in `local_trusted` mode retains those records under the synthetic `local-operator` owner. GitHub authentication deliberately does not make another principal's records visible, so the board will initially appear empty even though the history remains intact.
+
+After the intended operator has completed GitHub login, an administrator may explicitly transfer that legacy history with:
+
+```sh
+BOBSLED_DATA_DIR=/var/lib/bobsled/data npm run migrate:local-operator -- --confirm-single-active-github-user
+```
+
+The migration refuses to run unless exactly one distinct, unexpired `frostyard` GitHub principal has an active session. It checks all owner-scoped idempotency keys for conflicts, atomically transfers runs plus related issue actions and draft publications, and appends `run.owner_transferred` audit evidence without rewriting historical actor IDs. It is idempotent and prints only transfer counts, not the principal's identity or session data. Back up the database before invoking it.
+
 ## Subscription authentication
 
 Each host authenticates Codex and Copilot independently. Never copy `auth.json` between development and production: two hosts refreshing cloned OAuth state can invalidate one another.
