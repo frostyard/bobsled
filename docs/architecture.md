@@ -46,6 +46,10 @@ The integration workspace service accepts only a ready plan and its exact ordere
 
 Scope compatibility, patch authorization, integration readiness, and workspace assembly do not authorize a model call. Every projection reports `executionAuthorized: false` or `workerAuthorized: false`; these slices add no worker fan-out, conflict resolution, retry, token spend, concurrent execution, or GitHub capability. A later M5 step may give a bounded integration worker only the assembled workspace and typed task context.
 
+The bounded integration-worker contract declares a one-call budget for a known dependency-bearing task, and each runner invocation makes one native Pi/Codex dispatch. The staged index is the immutable prerequisite baseline; the worker is instructed to inspect it but leave all additional edits unstaged. It receives the assembled workspace, selected version 2 task and plan, repository policy, work item, scrubbed environment, and no GitHub credential. Trusted postcondition evaluation requires unchanged HEAD and staged-patch digest, recomputes the worker's unstaged paths against task ownership, compares model claims with Git evidence, and checks disposition/final-digest consistency. Any violation blocks the result and `furtherWorkerAuthorized` is always false.
+
+This contract and runner are not yet connected to job orchestration or the operator UI. Required repository gates, durable ledger evidence, durable prevention of a repeated invocation, clean-stack execution, and a separate conflict-resolution path must exist before the roadmap's integration-worker item is complete.
+
 ## M2 durable ledger
 
 Bobsled workflow state lives in `bobsled.db` beneath `BOBSLED_DATA_DIR`, separate from Flue's conversation database. This avoids coupling product migrations to framework persistence and leaves either side replaceable.
