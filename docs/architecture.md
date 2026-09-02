@@ -42,7 +42,9 @@ Trusted Git changed paths are bound to a version 2 task through `authorizeTaskPa
 
 `planIntegrationAssembly` prepares the trusted input for a later integration workspace. For one dependency-bearing task it discovers the complete transitive prerequisite set, recomputes every task's patch-scope authorization, requires every patch to share the requested base commit, and orders the resulting stack topologically in declared task order. Missing, duplicate, unrelated, base-mismatched, or out-of-scope evidence blocks the plan and exposes no partial assembly stack.
 
-Scope compatibility, patch authorization, and integration readiness are evidence, not execution authority. Every projection explicitly reports `executionAuthorized: false`; these slices add no worker fan-out, workspace lease, patch application, conflict resolution, retry, token spend, concurrent execution, or GitHub capability. A later M5 step must assemble the verified patch stack in an isolated workspace before a bounded integration worker can run.
+The integration workspace service accepts only a ready plan and its exact ordered patch payloads. It verifies task identity, SHA-256 digests, per-patch and aggregate byte limits, canonical base commit, and a fresh UUID-addressed destination before creating a detached Git worktree. Patches are applied through `git apply --index` without a shell. A rejected patch preserves the preceding stack and records bounded conflict evidence; a successful stack must leave HEAD unchanged and its Git-computed changed paths must equal the trusted plan. Verified empty patches remain explicit no-change prerequisites. The combined patch digest and result are stored beside the isolated workspace.
+
+Scope compatibility, patch authorization, integration readiness, and workspace assembly do not authorize a model call. Every projection reports `executionAuthorized: false` or `workerAuthorized: false`; these slices add no worker fan-out, conflict resolution, retry, token spend, concurrent execution, or GitHub capability. A later M5 step may give a bounded integration worker only the assembled workspace and typed task context.
 
 ## M2 durable ledger
 
