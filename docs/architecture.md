@@ -34,9 +34,11 @@ Cross-repository publication is a barrier, not a distributed transaction: Bobsle
 
 ## M5 multi-worker planning
 
-The first M5 contract represents one repository-scoped plan as a versioned, schema-validated dependency DAG. Every task has a stable lowercase ID, bounded objective, acceptance criteria, and explicit in-plan dependencies. Trusted validation rejects duplicate IDs and edges, missing dependency targets, self-dependencies, and cycles. A deterministic helper derives dependency-readiness layers in declared task order.
+The first M5 contract represents one repository-scoped plan as a versioned, schema-validated dependency DAG. Every task has a stable lowercase ID, bounded objective, acceptance criteria, and explicit in-plan dependencies. Trusted validation rejects duplicate IDs and edges, missing dependency targets, self-dependencies, and cycles. A deterministic helper derives dependency-readiness layers in declared task order. Version 1 plans remain readable as dependency-only historical input.
 
-Dependency readiness is not execution authority. Tasks in the same layer are not considered safe to run concurrently until a later M5 policy adds non-overlapping file-scope ownership and conflict checks. This slice adds no worker fan-out, retry, workspace, token-spend, or GitHub capability.
+Version 2 assigns each task one or more literal repository-relative ownership scopes. A scope owns one exact file, one directory subtree, or the entire repository; glob syntax, absolute paths, empty/dot/parent segments, backslashes, and control characters are rejected. Redundant scopes inside one task are invalid. Two tasks may overlap only when a transitive dependency orders them, so tasks that could become ready independently cannot claim the same path even when a static topological layering happens to place them in different layers.
+
+Scope compatibility is not execution authority. The trusted readiness projection explicitly reports `executionAuthorized: false`; this slice adds no worker fan-out, workspace lease, retry, token spend, concurrent execution, or GitHub capability. A later M5 step must bind scopes to isolated workspaces and enforce actual patches against ownership before any parallel scheduling is permitted.
 
 ## M2 durable ledger
 
