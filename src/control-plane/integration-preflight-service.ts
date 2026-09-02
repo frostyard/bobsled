@@ -9,7 +9,7 @@ import {
 	type IntegrationPreflightResult,
 	type IntegrationWorkspaceInspection,
 } from './integration-preflight-contracts.ts';
-import { IntegrationInvocationStore, type IntegrationInvocationLease } from './integration-invocation-store.ts';
+import { IntegrationInvocationStore, type IntegrationPreflightClaim } from './integration-invocation-store.ts';
 
 const execFileAsync = promisify(execFile);
 const MAX_GIT_OUTPUT_BYTES = 4 * 1024 * 1024;
@@ -54,9 +54,9 @@ export class IntegrationPreflightService {
 		private readonly inspector: IntegrationWorkspaceInspector = inspectIntegrationWorkspace,
 	) {}
 
-	async run(integrationAttemptId: string, ownerId: string): Promise<IntegrationInvocationLease> {
+	async run(integrationAttemptId: string, ownerId: string): Promise<IntegrationPreflightClaim> {
 		const lease = this.store.get(integrationAttemptId, ownerId);
-		if (lease.preflight) return lease;
+		if (lease.preflight) return { lease, newlyClaimed: false };
 		if (lease.status !== 'reserved' || lease.workerCalls !== 0) throw new Error('Integration invocation is not awaiting clean-stack preflight');
 		let parent;
 		try {

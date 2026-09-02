@@ -12,6 +12,7 @@ export const IntegrationWorkspaceInspectionSchema = v.object({
 
 export const IntegrationPreflightViolationSchema = v.picklist([
 	'parent_unavailable',
+	'policy_denied',
 	'inspection_failed',
 	'head_moved',
 	'index_changed',
