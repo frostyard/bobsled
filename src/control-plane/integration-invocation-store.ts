@@ -9,6 +9,7 @@ import {
 	type IntegrationWorkerDisposition,
 } from './integration-worker-contracts.ts';
 import { WorkPlanTaskIdSchema } from './work-plan-contracts.ts';
+import { ensureMultiWorkerParentSchema } from './multi-worker-parent-store.ts';
 
 const ReservationSchema = v.object({
 	integrationAttemptId: v.pipe(v.string(), v.uuid()),
@@ -47,6 +48,7 @@ function hash(value: unknown): string {
 }
 
 export function ensureIntegrationInvocationSchema(db: Database.Database): void {
+	ensureMultiWorkerParentSchema(db);
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS integration_invocations (
 			id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, assembly_id TEXT NOT NULL UNIQUE,
@@ -68,6 +70,7 @@ export class IntegrationInvocationStore {
 		this.#db = new Database(path);
 		if (path !== ':memory:') chmodSync(path, 0o600);
 		this.#db.pragma('journal_mode = WAL');
+		this.#db.pragma('foreign_keys = ON');
 		this.#db.pragma('busy_timeout = 5000');
 		this.#db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
 		ensureIntegrationInvocationSchema(this.#db);
@@ -84,6 +87,17 @@ export class IntegrationInvocationStore {
 		if (!idempotencyKey || idempotencyKey.length > 200) throw new Error('A bounded idempotency key is required');
 		const requestHash = hash(reservation);
 		return this.#db.transaction(() => {
+			const parent = this.#db.prepare(`SELECT multi_worker_plans.owner_id, multi_worker_plans.plan_sha256,
+				integration_assemblies.task_id, integration_assemblies.status
+				FROM integration_assemblies JOIN multi_worker_plans ON multi_worker_plans.id = integration_assemblies.plan_id
+				WHERE integration_assemblies.id = ?`).get(reservation.assemblyId) as {
+					owner_id: string; plan_sha256: string; task_id: string; status: string;
+				} | undefined;
+			if (!parent) throw new IntegrationInvocationConflictError('Integration assembly has no durable parent');
+			if (parent.owner_id !== ownerId) throw new IntegrationInvocationForbiddenError('Integration assembly belongs to another principal');
+			if (parent.plan_sha256 !== reservation.planSha256 || parent.task_id !== reservation.taskId || parent.status !== 'assembled') {
+				throw new IntegrationInvocationConflictError('Invocation does not match an assembled plan parent');
+			}
 			const replay = this.#db.prepare('SELECT id, request_hash FROM integration_invocations WHERE owner_id = ? AND idempotency_key = ?')
 				.get(ownerId, idempotencyKey) as { id: string; request_hash: string } | undefined;
 			if (replay) {
