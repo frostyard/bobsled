@@ -40,7 +40,9 @@ Version 2 assigns each task one or more literal repository-relative ownership sc
 
 Trusted Git changed paths are bound to a version 2 task through `authorizeTaskPatch`. The boundary validates the complete plan and task identity before applying exact-file, directory-subtree, or repository ownership. Invalid, duplicate, and outside-scope paths produce typed deterministic violations; an unknown task or more than 100 changed paths fails closed. The low-level matcher is private so callers cannot bypass plan and path validation.
 
-Scope compatibility and patch authorization are evidence, not execution authority. The trusted readiness projection explicitly reports `executionAuthorized: false`; these slices add no worker fan-out, workspace lease, retry, token spend, concurrent execution, or GitHub capability. A later M5 step must bind scopes and patch dispositions to isolated workspaces before any parallel scheduling is permitted.
+`planIntegrationAssembly` prepares the trusted input for a later integration workspace. For one dependency-bearing task it discovers the complete transitive prerequisite set, recomputes every task's patch-scope authorization, requires every patch to share the requested base commit, and orders the resulting stack topologically in declared task order. Missing, duplicate, unrelated, base-mismatched, or out-of-scope evidence blocks the plan and exposes no partial assembly stack.
+
+Scope compatibility, patch authorization, and integration readiness are evidence, not execution authority. Every projection explicitly reports `executionAuthorized: false`; these slices add no worker fan-out, workspace lease, patch application, conflict resolution, retry, token spend, concurrent execution, or GitHub capability. A later M5 step must assemble the verified patch stack in an isolated workspace before a bounded integration worker can run.
 
 ## M2 durable ledger
 
