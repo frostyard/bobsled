@@ -4,7 +4,9 @@ Bobsled's GitHub authority expands by milestone. The App is not an agent tool: o
 
 ## M2 registration
 
-Install the App only on explicitly enrolled repositories. Start with:
+The organization may install the App across all Frostyard repositories in anticipation of near-term enrollment. This accepted installation scope is not execution authority: Bobsled still admits work only for repositories in its versioned enrollment registry and scopes each installation token to the enrolled repository's immutable GitHub ID.
+
+Start with:
 
 - Repository metadata: read (implicit GitHub App baseline).
 - Issues: read and write, for policy-controlled labels and comments.

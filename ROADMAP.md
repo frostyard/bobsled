@@ -37,10 +37,10 @@ Linux is the canonical production runtime. Multi-repository changes are a first-
 - [x] Preserve local-trusted history through an explicit, conflict-checked, audited GitHub-principal cutover.
 - [x] Support fail-closed GitHub App private-key files so deployed PEM material bypasses dotenv and systemd parsing.
 - [x] Complete the external HTTPS webhook and operator-authentication setup.
-- [ ] Narrow the live GitHub App installation to explicitly enrolled repositories and only the permissions required by enabled capabilities.
+- [ ] Narrow the live GitHub App permissions to only those required by enabled capabilities.
 - [ ] Live-prove label/comment writes for an explicitly authorized repository while code publication remains disabled.
 
-External-setup evidence: authenticated HTTPS operator access, signed ping and automatic installation webhook admission, invalid-signature rejection, idempotent redelivery, private-key-file rotation with the predecessor revoked, and post-revocation installation-token minting all passed on Linux. Event-driven dispatch and GitHub mutations remain disabled while the live installation grant is broader than the declared repository and permission policy.
+External-setup evidence: authenticated HTTPS operator access, signed ping and automatic installation webhook admission, invalid-signature rejection, idempotent redelivery, private-key-file rotation with the predecessor revoked, and post-revocation installation-token minting all passed on Linux. Organization-wide installation coverage is an accepted operator decision for near-term expansion; Bobsled's enrolled-repository policy remains the execution boundary. Event-driven dispatch and GitHub mutations remain disabled while the live permission grant is broader than the declared capability policy.
 
 ### M2-L — Linux deployment foundation — `DONE`
 
@@ -110,7 +110,7 @@ M5 DAG-contract evidence: the versioned runtime schema bounds task content and c
 
 ## Current safety boundary
 
-- Public ingress is bounded by Frostyard GitHub operator authentication and verified webhooks; event-triggered dispatch remains disabled until the live App grant matches repository policy.
+- Public ingress is bounded by Frostyard GitHub operator authentication and verified webhooks; event-triggered dispatch remains disabled until the live App permissions match capability policy.
 - Repository policies and deterministic gates outrank model recommendations.
 - Models cannot select arbitrary repositories or mutate repository policy.
 - Raw Flue observations and verified webhook bodies are sensitive operational records and are not exposed through a content API.
