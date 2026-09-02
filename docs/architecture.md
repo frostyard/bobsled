@@ -52,7 +52,9 @@ This contract and runner are not yet connected to job orchestration or the opera
 
 The first durable orchestration boundary reserves an integration invocation by principal, assembly UUID, plan digest, task ID, and idempotency key. A SQLite transaction may move it from `reserved` to `running` exactly once while atomically fixing `workerCalls` at one. Completion accepts only matching typed postcondition evidence; process failure is terminal historical evidence. Replays of the same reservation converge, while changed idempotency input, assembly reuse, concurrent claims, cross-principal access, and any attempt to reclaim terminal history fail closed. Recovery requires a new assembly and invocation rather than erasing or retrying the prior call.
 
-The lease is deliberately not yet a gate runner: M5 plans and assemblies still need a durable parent relation to the existing run/job model before gate artifacts can be attached without becoming orphaned evidence.
+An immutable M5 plan parent now binds a validated version 2 plan, its canonical SHA-256 digest, and base commit to an existing principal-owned job. An assembly parent binds one dependency-bearing task and its complete typed workspace result to that plan. Exact plan and assembly replays converge after process interruption; changed idempotency input, duplicate plan evidence, task/base mismatches, competing assemblies, or cross-principal access fail closed. Invocation reservation now verifies this complete chain and accepts only an `assembled` parent whose owner, plan digest, and task match.
+
+Migration 4 establishes `job → multi-worker plan → integration assembly → one-use invocation` as the durable evidence lineage. Trusted gate results can now attach to the invocation without becoming orphaned; executing and persisting those gates is the next bounded M5 slice.
 
 ## M2 durable ledger
 
