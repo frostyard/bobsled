@@ -19,3 +19,12 @@ This is a [Flue](https://flueframework.com) project: agents are TypeScript funct
 - `npm test` — run deterministic Node tests.
 - `npx flue docs search <query>` — search the Flue docs from the terminal (then `flue docs read <path>`).
 - `npx flue add` — list blueprints for adding channels, sandboxes, and databases.
+
+## Change workflow
+
+- Do not commit milestone work directly to `main`. Implement every roadmap milestone—or each bounded step when a milestone is intentionally split—on a short-lived branch and open a pull request against `main`.
+- Keep one PR scoped to one milestone or declared milestone step. Update `ROADMAP.md` in the same PR when its status, scope, evidence, or safety boundary changes.
+- Run the repository's declared verification before requesting review. Human review and merge remain mandatory.
+- Use Conventional Commits for every commit and PR title: `<type>[optional scope][!]: <description>`.
+- Prefer the standard types `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`, and `revert`. Use `!` or a `BREAKING CHANGE:` footer for incompatible changes.
+- Keep descriptions imperative, specific, and lowercase after the colon; for example, `feat(ledger): add retry leases` or `docs: define contribution workflow`.
