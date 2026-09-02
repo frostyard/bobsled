@@ -31,7 +31,7 @@ async function withGitHubAuthEnvironment<T>(run: () => Promise<T>): Promise<T> {
 	}
 }
 
-test('lists only enrolled repositories and exposes their read-only policy', async () => {
+test('lists only enrolled repositories and exposes their bounded policies', async () => {
 	const response = await app.request('/api/repositories');
 	assert.equal(response.status, 200);
 	const repositories = await response.json() as Array<{
@@ -39,10 +39,13 @@ test('lists only enrolled repositories and exposes their read-only policy', asyn
 		readOnly: boolean;
 		capabilities: { writeGitHub: boolean };
 	}>;
-	assert.equal(repositories.length, 1);
-	assert.equal(repositories[0].id, 'frostyard/clix');
-	assert.equal(repositories[0].readOnly, true);
-	assert.equal(repositories[0].capabilities.writeGitHub, false);
+	assert.equal(repositories.length, 2);
+	const clix = repositories.find((repository) => repository.id === 'frostyard/clix');
+	const bobsled = repositories.find((repository) => repository.id === 'frostyard/bobsled');
+	assert.equal(clix?.readOnly, true);
+	assert.equal(clix?.capabilities.writeGitHub, false);
+	assert.equal(bobsled?.readOnly, false);
+	assert.equal(bobsled?.capabilities.writeGitHub, true);
 });
 
 test('serves clix dry-run fixtures and rejects unenrolled repositories', async () => {
@@ -52,6 +55,9 @@ test('serves clix dry-run fixtures and rejects unenrolled repositories', async (
 
 	const missing = await app.request('/api/repositories/frostyard/not-enrolled/fixtures');
 	assert.equal(missing.status, 404);
+	const bobsled = await app.request('/api/repositories/frostyard/bobsled/fixtures');
+	assert.equal(bobsled.status, 200);
+	assert.deepEqual(await bobsled.json(), []);
 });
 
 test('serves the local factory interface', async () => {

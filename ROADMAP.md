@@ -39,6 +39,7 @@ Linux is the canonical production runtime. Multi-repository changes are a first-
 - [x] Complete the external HTTPS webhook and operator-authentication setup.
 - [x] Surface effective permission drift from verified installation snapshots without minting a token or exposing raw authority.
 - [x] Narrow the live GitHub App permissions to only those required by enabled capabilities.
+- [x] Enroll Bobsled itself for issue metadata writes while worker execution, publication, and merge remain disabled.
 - [ ] Live-prove label/comment writes for an explicitly authorized repository while code publication remains disabled.
 
 External-setup evidence: authenticated HTTPS operator access, signed ping and automatic installation webhook admission, invalid-signature rejection, idempotent redelivery, private-key-file rotation with the predecessor revoked, and post-revocation installation-token minting all passed on Linux. Organization-wide installation coverage is an accepted operator decision for near-term expansion; Bobsled's enrolled-repository policy remains the execution boundary. Event-driven dispatch and GitHub mutations remain disabled pending their separate policy and live-proof steps.
