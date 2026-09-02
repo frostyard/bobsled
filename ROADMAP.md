@@ -61,6 +61,7 @@ Linux is the canonical production runtime. Multi-repository changes are a first-
 - [x] Durable findings, verdicts, evidence, publication intent, and required-check state.
 - [x] Exact-patch-bound, draft-only publication with deterministic Git objects and no force push.
 - [x] Five-lane operator board with card actions, evidence details, and documented lane criteria.
+- [x] Bounded authenticated-operator identity chip in the board header without exposing immutable IDs, roles, or session metadata.
 - [ ] Enable publication for one explicitly authorized non-test repository.
 - [ ] Live-prove draft branch/PR creation and observe required GitHub checks; human review and merge remain mandatory.
 

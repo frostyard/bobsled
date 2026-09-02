@@ -1,4 +1,16 @@
-export const controlPlaneHtml = String.raw`<!doctype html>
+export interface ControlPlaneIdentity {
+	provider: 'github' | 'local';
+	login?: string;
+}
+
+function escapeHtml(value: string): string {
+	return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+}
+
+export function controlPlaneHtml(identity: ControlPlaneIdentity): string {
+	const identityLabel = identity.provider === 'github' ? `@${identity.login ?? 'unknown'}` : 'Local operator';
+	const identityProvider = identity.provider === 'github' ? 'GitHub' : 'Trusted local';
+	return String.raw`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -13,6 +25,10 @@ export const controlPlaneHtml = String.raw`<!doctype html>
     h1 { margin:0; font-size:clamp(2rem,6vw,4.5rem); line-height:.9; letter-spacing:-.07em; }
     h1 span,.status { color:#d5ff55; }
     .eyebrow { color:#9ba893; text-transform:uppercase; letter-spacing:.16em; font-size:.76rem; }
+    .header-context { display:grid; justify-items:end; gap:9px; }
+    .operator-chip { display:flex; align-items:center; gap:9px; border:1px solid #465148; border-radius:999px; padding:7px 10px; background:#151b17; font-size:.76rem; }
+    .operator-chip::before { content:''; width:8px; height:8px; border-radius:50%; background:#6ee7b7; box-shadow:0 0 0 3px #6ee7b722; }
+    .operator-provider { color:#8f9b90; text-transform:uppercase; letter-spacing:.08em; font-size:.64rem; }
     .grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,.8fr); gap:18px; }
     .panel { border:1px solid #374039; background:rgba(20,25,22,.94); padding:20px; box-shadow:0 18px 60px #0006; }
     .ledger { margin-top:18px; }
@@ -99,12 +115,12 @@ export const controlPlaneHtml = String.raw`<!doctype html>
     .badge { display:inline-block; border:1px solid #596658; padding:4px 7px; margin:0 6px 8px 0; font-size:.72rem; text-transform:uppercase; }
     .error { color:#ff887a; }
     footer { margin-top:18px; color:#778276; font-size:.72rem; }
-    @media(max-width:900px){ .grid{grid-template-columns:1fr} header{align-items:start;flex-direction:column} .board-heading{align-items:stretch;flex-direction:column}.board-filters{justify-content:stretch}.board-filters input{max-width:none}.board{grid-template-columns:repeat(5,82vw)} }
+    @media(max-width:900px){ .grid{grid-template-columns:1fr} header{align-items:start;flex-direction:column}.header-context{justify-items:start} .board-heading{align-items:stretch;flex-direction:column}.board-filters{justify-content:stretch}.board-filters input{max-width:none}.board{grid-template-columns:repeat(5,82vw)} }
   </style>
 </head>
 <body>
 <main>
-  <header><div><div class="eyebrow">Frostyard engineering control plane</div><h1>BOB<span>SLED</span></h1></div><div class="eyebrow">M4-B · controlled publication</div></header>
+  <header><div><div class="eyebrow">Frostyard engineering control plane</div><h1>BOB<span>SLED</span></h1></div><div class="header-context"><div class="eyebrow">M4-B · controlled publication</div><div class="operator-chip" aria-label="Authenticated operator"><span class="operator-provider">${escapeHtml(identityProvider)}</span><strong>${escapeHtml(identityLabel)}</strong></div></div></header>
   <div class="grid">
     <section class="panel">
       <h2>Work intake</h2>
@@ -563,3 +579,4 @@ try {
 </script>
 </body>
 </html>`;
+}
