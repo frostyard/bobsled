@@ -38,7 +38,9 @@ The first M5 contract represents one repository-scoped plan as a versioned, sche
 
 Version 2 assigns each task one or more literal repository-relative ownership scopes. A scope owns one exact file, one directory subtree, or the entire repository; glob syntax, absolute paths, empty/dot/parent segments, backslashes, and control characters are rejected. Redundant scopes inside one task are invalid. Two tasks may overlap only when a transitive dependency orders them, so tasks that could become ready independently cannot claim the same path even when a static topological layering happens to place them in different layers.
 
-Scope compatibility is not execution authority. The trusted readiness projection explicitly reports `executionAuthorized: false`; this slice adds no worker fan-out, workspace lease, retry, token spend, concurrent execution, or GitHub capability. A later M5 step must bind scopes to isolated workspaces and enforce actual patches against ownership before any parallel scheduling is permitted.
+Trusted Git changed paths are bound to a version 2 task through `authorizeTaskPatch`. The boundary validates the complete plan and task identity before applying exact-file, directory-subtree, or repository ownership. Invalid, duplicate, and outside-scope paths produce typed deterministic violations; an unknown task or more than 100 changed paths fails closed. The low-level matcher is private so callers cannot bypass plan and path validation.
+
+Scope compatibility and patch authorization are evidence, not execution authority. The trusted readiness projection explicitly reports `executionAuthorized: false`; these slices add no worker fan-out, workspace lease, retry, token spend, concurrent execution, or GitHub capability. A later M5 step must bind scopes and patch dispositions to isolated workspaces before any parallel scheduling is permitted.
 
 ## M2 durable ledger
 
