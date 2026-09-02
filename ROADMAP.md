@@ -92,11 +92,11 @@ Readiness evidence: local credentials and runtime state resolve outside the repo
 ### M5 — Multi-worker plans — `ACTIVE`
 
 - [x] Represent work as a typed dependency DAG.
-- [ ] Assign non-overlapping file scopes to parallel workers.
+- [x] Assign non-overlapping file scopes to prospective parallel workers.
 - [ ] Add an integration worker for dependent or conflicting changes.
 - [ ] Bound fan-out, retries, runtime, and subscription usage.
 
-M5 DAG-contract evidence: the versioned runtime schema bounds task content and count, requires stable IDs and acceptance criteria, and rejects duplicate IDs/edges, missing targets, self-dependencies, and cycles. Deterministic dependency layers preserve declared order, but deliberately grant no parallel-execution authority before file-scope ownership exists.
+M5 DAG-contract evidence: version 1 remains readable and bounds task content/count, requires stable IDs and acceptance criteria, and rejects duplicate IDs/edges, missing targets, self-dependencies, and cycles. Version 2 adds literal file, directory-subtree, or repository-wide ownership; rejects ambiguous paths and redundant scopes; and permits overlap only when a transitive dependency orders the tasks. The deterministic readiness projection preserves declared order and explicitly grants no execution authority, fan-out, workspace lease, retry, or token spend.
 
 ### M6 — Multi-repository change sets — `PLANNED`
 
