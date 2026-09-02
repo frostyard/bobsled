@@ -130,7 +130,12 @@ if (githubWebhookSecret) {
 	app.post('/channels/github/webhook', (context) => context.json({ error: 'GitHub webhooks are not configured' }, 503));
 }
 
-app.get('/', (context) => context.html(controlPlaneHtml));
+app.get('/', (context) => {
+	const principal = context.get('principal');
+	return context.html(controlPlaneHtml('login' in principal
+		? { provider: 'github', login: principal.login }
+		: { provider: 'local' }));
+});
 
 app.get('/api/repositories', (context) => context.json(repositories));
 app.get('/api/github-app/status', (context) => context.json({ ...githubAppStatus(), webhooks: githubEventStore.metrics() }));

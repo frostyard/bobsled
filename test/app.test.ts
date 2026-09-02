@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import app from '../src/app.ts';
 import { operatorAuthConfiguration } from '../src/control-plane/operator-auth.ts';
 import { operatorSessionStore } from '../src/control-plane/operator-sessions.ts';
+import { controlPlaneHtml } from '../src/control-plane/ui.ts';
 
 const authEnvironmentKeys = [
 	'BOBSLED_OPERATOR_AUTH_MODE', 'BOBSLED_GITHUB_CLIENT_ID', 'BOBSLED_GITHUB_CLIENT_SECRET',
@@ -58,6 +59,7 @@ test('serves the local factory interface', async () => {
 	assert.equal(response.status, 200);
 	const html = await response.text();
 	assert.match(html, /BOB<span>SLED/);
+	assert.match(html, /Trusted local<\/span><strong>Local operator/);
 	assert.match(html, /Trusted final evidence/);
 	assert.match(html, /Next safe action:/);
 	assert.match(html, /Revise task from findings/);
@@ -73,6 +75,12 @@ test('serves the local factory interface', async () => {
 	const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)?.[1];
 	assert.ok(script, 'expected the control-plane module script');
 	assert.doesNotThrow(() => new vm.Script(`(async () => {${script}})()`));
+});
+
+test('escapes server-rendered operator identity', () => {
+	const html = controlPlaneHtml({ provider: 'github', login: '<operator&admin>' });
+	assert.match(html, /@&lt;operator&amp;admin&gt;/);
+	assert.doesNotMatch(html, /@<operator&admin>/);
 });
 
 test('serves a typed operator board projection', async () => {
@@ -190,6 +198,11 @@ test('authenticated principals reach protected routes and mutations enforce orig
 			code: 'code', state: login.state, stateCookie: login.state, configuration, fetch: fakeFetch,
 		});
 		const headers = { cookie: `__Host-bobsled-session=${completed.sessionCookie}` };
+		const page = await app.request('https://factory.example/', { headers });
+		assert.equal(page.status, 200);
+		const html = await page.text();
+		assert.match(html, /GitHub<\/span><strong>@operator/);
+		assert.doesNotMatch(html, /github:999|member/);
 		assert.equal((await app.request('https://factory.example/api/runs', { headers })).status, 200);
 		assert.equal((await app.request('https://factory.example/api/runs', { method: 'POST', headers })).status, 403);
 		assert.equal((await app.request('https://factory.example/auth/logout', {
