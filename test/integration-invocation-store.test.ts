@@ -12,6 +12,7 @@ import {
 } from '../src/control-plane/integration-invocation-store.ts';
 import { JobLedger } from '../src/control-plane/ledger.ts';
 import { IntegrationGateService } from '../src/control-plane/integration-gate-service.ts';
+import { IntegrationPreflightService } from '../src/control-plane/integration-preflight-service.ts';
 import {
 	MultiWorkerParentConflictError,
 	MultiWorkerParentForbiddenError,
@@ -67,6 +68,18 @@ function outcome(integrationAttemptId: string) {
 	};
 }
 
+function passingPreflight(integrationAttemptId: string) {
+	return {
+		integrationAttemptId, status: 'passed' as const,
+		inspection: { headCommit: baseCommit, stagedPatchSha256: 'b'.repeat(64), dirtyPaths: [] },
+		violations: [], detail: 'Workspace matches its durable assembly evidence', workerAuthorized: true as const,
+	};
+}
+
+function authorizeWorker(store: IntegrationInvocationStore, integrationAttemptId: string): void {
+	store.recordPreflightAndClaim(integrationAttemptId, ownerId, passingPreflight(integrationAttemptId));
+}
+
 test('persists immutable plan and assembly parents through database reopen', () => {
 	const value = fixture();
 	const reopened = new MultiWorkerParentStore(value.path);
@@ -91,12 +104,67 @@ test('persists a one-use invocation from reservation through terminal evidence',
 	try {
 		const input = value.reservation;
 		assert.equal(store.reserve(input, ownerId, 'same-request').status, 'reserved');
-		assert.equal(store.claim(input.integrationAttemptId, ownerId).workerCalls, 1);
+		assert.throws(() => store.complete(input.integrationAttemptId, ownerId, outcome(input.integrationAttemptId)), IntegrationInvocationConflictError);
+		authorizeWorker(store, input.integrationAttemptId);
+		assert.equal(store.get(input.integrationAttemptId, ownerId).workerCalls, 1);
 		const completed = store.complete(input.integrationAttemptId, ownerId, outcome(input.integrationAttemptId));
 		assert.equal(completed.status, 'awaiting_gates');
 		assert.deepEqual(completed.outcome, outcome(input.integrationAttemptId));
-		assert.throws(() => store.claim(input.integrationAttemptId, ownerId), IntegrationInvocationConflictError);
 		assert.throws(() => store.complete(input.integrationAttemptId, ownerId, outcome(input.integrationAttemptId)), IntegrationInvocationConflictError);
+	} finally { store.close(); }
+});
+
+test('derives clean-stack preflight and atomically claims the worker lease', async () => {
+	const value = fixture();
+	const store = new IntegrationInvocationStore(value.path);
+	try {
+		store.reserve(value.reservation, ownerId, 'request');
+		const inspected: string[] = [];
+		const service = new IntegrationPreflightService(store, async (workspacePath) => {
+			inspected.push(workspacePath);
+			return { headCommit: baseCommit, stagedPatchSha256: 'b'.repeat(64), dirtyPaths: [] };
+		});
+		await assert.rejects(() => service.run(value.reservation.integrationAttemptId, 'different-operator'), IntegrationInvocationForbiddenError);
+		const ready = await service.run(value.reservation.integrationAttemptId, ownerId);
+		assert.equal(ready.status, 'running');
+		assert.equal(ready.workerCalls, 1);
+		assert.equal(ready.preflight?.result.status, 'passed');
+		assert.equal(ready.preflight?.result.workerAuthorized, true);
+		assert.deepEqual(inspected, [join(value.root, 'workspace')]);
+		assert.equal((await service.run(value.reservation.integrationAttemptId, ownerId)).status, 'running');
+		assert.deepEqual(inspected, [join(value.root, 'workspace')]);
+	} finally { store.close(); }
+});
+
+test('blocks dirty integration workspaces without spending the worker call', async () => {
+	const value = fixture();
+	const store = new IntegrationInvocationStore(value.path);
+	try {
+		store.reserve(value.reservation, ownerId, 'request');
+		const blocked = await new IntegrationPreflightService(store, async () => ({
+			headCommit: baseCommit, stagedPatchSha256: 'b'.repeat(64), dirtyPaths: ['stray.txt'],
+		})).run(value.reservation.integrationAttemptId, ownerId);
+		assert.equal(blocked.status, 'blocked');
+		assert.equal(blocked.workerCalls, 0);
+		assert.deepEqual(blocked.preflight?.result.violations, ['dirty_worktree']);
+		assert.throws(() => store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId)), IntegrationInvocationConflictError);
+	} finally { store.close(); }
+});
+
+test('records inspection failures and rejects changed preflight replay', async () => {
+	const value = fixture();
+	const store = new IntegrationInvocationStore(value.path);
+	try {
+		store.reserve(value.reservation, ownerId, 'request');
+		const blocked = await new IntegrationPreflightService(store, async () => { throw new Error('workspace unavailable'); })
+			.run(value.reservation.integrationAttemptId, ownerId);
+		assert.equal(blocked.status, 'blocked');
+		assert.equal(blocked.workerCalls, 0);
+		assert.deepEqual(blocked.preflight?.result.violations, ['inspection_failed']);
+		assert.match(blocked.preflight?.result.detail ?? '', /workspace unavailable/);
+		assert.throws(() => store.recordPreflightAndClaim(
+			value.reservation.integrationAttemptId, ownerId, passingPreflight(value.reservation.integrationAttemptId),
+		), IntegrationInvocationConflictError);
 	} finally { store.close(); }
 });
 
@@ -105,7 +173,7 @@ test('runs required gates in policy order and settles durable success evidence',
 	const store = new IntegrationInvocationStore(value.path);
 	try {
 		store.reserve(value.reservation, ownerId, 'request');
-		store.claim(value.reservation.integrationAttemptId, ownerId);
+		authorizeWorker(store, value.reservation.integrationAttemptId);
 		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
 		const commands: string[] = [];
 		const workspaces: string[] = [];
@@ -132,7 +200,7 @@ test('stops at the first failed gate and settles the invocation blocked', async 
 	const store = new IntegrationInvocationStore(value.path);
 	try {
 		store.reserve(value.reservation, ownerId, 'request');
-		store.claim(value.reservation.integrationAttemptId, ownerId);
+		authorizeWorker(store, value.reservation.integrationAttemptId);
 		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
 		let calls = 0;
 		const service = new IntegrationGateService(store, async () => {
@@ -153,7 +221,7 @@ test('records runner failures as terminal gate evidence instead of stranding the
 	const store = new IntegrationInvocationStore(value.path);
 	try {
 		store.reserve(value.reservation, ownerId, 'request');
-		store.claim(value.reservation.integrationAttemptId, ownerId);
+		authorizeWorker(store, value.reservation.integrationAttemptId);
 		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
 		const service = new IntegrationGateService(store, async () => { throw new Error('runner unavailable'); });
 		const settled = await service.run(value.reservation.integrationAttemptId, ownerId);
@@ -168,7 +236,7 @@ test('persists a trusted gate timeout as terminal blocked evidence', async () =>
 	const store = new IntegrationInvocationStore(value.path);
 	try {
 		store.reserve(value.reservation, ownerId, 'request');
-		store.claim(value.reservation.integrationAttemptId, ownerId);
+		authorizeWorker(store, value.reservation.integrationAttemptId);
 		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
 		const service = new IntegrationGateService(store, async () => ({
 			status: 'timed_out', exitCode: null, durationMs: 900_000, stdout: '', stderr: '', truncated: false,
@@ -193,7 +261,7 @@ test('fails workspace-mutating required gates closed without executing them', as
 	const store = new IntegrationInvocationStore(value.path);
 	try {
 		store.reserve(value.reservation, ownerId, 'request');
-		store.claim(value.reservation.integrationAttemptId, ownerId);
+		authorizeWorker(store, value.reservation.integrationAttemptId);
 		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
 		let calls = 0;
 		const service = new IntegrationGateService(store, async () => {
@@ -211,7 +279,7 @@ test('turns an unreadable durable parent into blocked evidence', async () => {
 	const value = fixture();
 	const store = new IntegrationInvocationStore(value.path);
 	store.reserve(value.reservation, ownerId, 'request');
-	store.claim(value.reservation.integrationAttemptId, ownerId);
+	authorizeWorker(store, value.reservation.integrationAttemptId);
 	store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
 	store.close();
 	const db = new Database(value.path);
@@ -234,7 +302,7 @@ test('rejects gate settlement before worker success and prevents replay', () => 
 	try {
 		store.reserve(value.reservation, ownerId, 'request');
 		assert.throws(() => store.settleGates(value.reservation.integrationAttemptId, ownerId, [result]), IntegrationInvocationConflictError);
-		store.claim(value.reservation.integrationAttemptId, ownerId);
+		authorizeWorker(store, value.reservation.integrationAttemptId);
 		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
 		assert.equal(store.settleGates(value.reservation.integrationAttemptId, ownerId, [result]).status, 'succeeded');
 		assert.throws(() => store.settleGates(value.reservation.integrationAttemptId, ownerId, [result]), IntegrationInvocationConflictError);
@@ -253,16 +321,21 @@ test('replays identical reservation but rejects mismatched or reused parent evid
 	} finally { store.close(); }
 });
 
-test('serializes claims across database connections and preserves failed history', () => {
+test('serializes preflight claims across database connections and preserves failed history', () => {
 	const value = fixture();
 	const first = new IntegrationInvocationStore(value.path);
 	const second = new IntegrationInvocationStore(value.path);
 	try {
 		first.reserve(value.reservation, ownerId, 'request');
-		assert.equal(first.claim(value.reservation.integrationAttemptId, ownerId).workerCalls, 1);
-		assert.throws(() => second.claim(value.reservation.integrationAttemptId, ownerId), IntegrationInvocationConflictError);
+		authorizeWorker(first, value.reservation.integrationAttemptId);
+		assert.equal(second.recordPreflightAndClaim(
+			value.reservation.integrationAttemptId, ownerId, passingPreflight(value.reservation.integrationAttemptId),
+		).workerCalls, 1);
 		assert.equal(second.fail(value.reservation.integrationAttemptId, ownerId).status, 'failed');
-		assert.throws(() => first.claim(value.reservation.integrationAttemptId, ownerId), IntegrationInvocationConflictError);
+		assert.throws(() => first.recordPreflightAndClaim(
+			value.reservation.integrationAttemptId, ownerId,
+			{ ...passingPreflight(value.reservation.integrationAttemptId), detail: 'different evidence' },
+		), IntegrationInvocationConflictError);
 	} finally { first.close(); second.close(); }
 });
 

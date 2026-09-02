@@ -13,6 +13,10 @@ import { ensureMultiWorkerParentSchema } from './multi-worker-parent-store.ts';
 import { GateResultSchema, type GateResult } from './execution-contracts.ts';
 import { RepositoryContractSchema, type RepositoryContract } from './contracts.ts';
 import { IntegrationWorkspaceResultSchema } from './integration-workspace-service.ts';
+import {
+	IntegrationPreflightResultSchema,
+	type IntegrationPreflightResult,
+} from './integration-preflight-contracts.ts';
 
 const ReservationSchema = v.object({
 	integrationAttemptId: v.pipe(v.string(), v.uuid()),
@@ -31,12 +35,18 @@ export const IntegrationInvocationLeaseSchema = v.object({
 	finishedAt: v.optional(v.string()),
 	outcome: v.optional(IntegrationWorkerDispositionSchema),
 	gateResults: v.optional(v.pipe(v.array(GateResultSchema), v.minLength(1), v.maxLength(50))),
+	preflight: v.optional(v.object({
+		result: IntegrationPreflightResultSchema,
+		createdAt: v.string(),
+	})),
 });
 
 export type IntegrationInvocationLease = v.InferOutput<typeof IntegrationInvocationLeaseSchema>;
-export interface IntegrationGateParentContext {
+export interface IntegrationParentContext {
 	workspacePath: string;
 	repository: RepositoryContract;
+	baseCommit: string;
+	assemblyPatchSha256: string;
 }
 
 export class IntegrationInvocationConflictError extends Error {}
@@ -69,8 +79,13 @@ export function ensureIntegrationInvocationSchema(db: Database.Database): void {
 			invocation_id TEXT PRIMARY KEY, results_json TEXT NOT NULL, created_at TEXT NOT NULL,
 			FOREIGN KEY(invocation_id) REFERENCES integration_invocations(id)
 		);
+		CREATE TABLE IF NOT EXISTS integration_preflights (
+			invocation_id TEXT PRIMARY KEY, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+			FOREIGN KEY(invocation_id) REFERENCES integration_invocations(id)
+		);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (10, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (11, datetime('now'));
 	`);
 }
 
@@ -130,18 +145,34 @@ export class IntegrationInvocationStore {
 		})();
 	}
 
-	claim(integrationAttemptId: string, ownerId: string): IntegrationInvocationLease {
+	recordPreflightAndClaim(integrationAttemptId: string, ownerId: string, inputResult: IntegrationPreflightResult): IntegrationInvocationLease {
+		const result = v.parse(IntegrationPreflightResultSchema, inputResult);
+		if (result.integrationAttemptId !== integrationAttemptId) {
+			throw new IntegrationInvocationConflictError('Integration preflight does not match its durable lease');
+		}
 		return this.#db.transaction(() => {
 			const lease = this.get(integrationAttemptId, ownerId);
+			const existing = lease.preflight?.result;
+			if (existing) {
+				if (JSON.stringify(canonical(existing)) !== JSON.stringify(canonical(result))) {
+					throw new IntegrationInvocationConflictError('Integration preflight conflicts with existing evidence');
+				}
+				return lease;
+			}
 			if (lease.status !== 'reserved' || lease.workerCalls !== 0) {
-				throw new IntegrationInvocationConflictError('Integration invocation is not available for its sole worker call');
+				throw new IntegrationInvocationConflictError('Only an unclaimed reservation can record integration preflight');
 			}
 			const timestamp = this.#now().toISOString();
-			const changed = this.#db.prepare(`UPDATE integration_invocations
-				SET status = 'running', worker_calls = 1, started_at = ?
-				WHERE id = ? AND owner_id = ? AND status = 'reserved' AND worker_calls = 0`)
-				.run(timestamp, integrationAttemptId, ownerId);
-			if (changed.changes !== 1) throw new IntegrationInvocationConflictError('Integration invocation was claimed concurrently');
+			this.#db.prepare('INSERT INTO integration_preflights (invocation_id, result_json, created_at) VALUES (?, ?, ?)')
+				.run(integrationAttemptId, JSON.stringify(result), timestamp);
+			const changed = result.status === 'passed'
+				? this.#db.prepare(`UPDATE integration_invocations SET status = 'running', worker_calls = 1, started_at = ?
+					WHERE id = ? AND owner_id = ? AND status = 'reserved' AND worker_calls = 0`)
+					.run(timestamp, integrationAttemptId, ownerId)
+				: this.#db.prepare(`UPDATE integration_invocations SET status = 'blocked', finished_at = ?
+					WHERE id = ? AND owner_id = ? AND status = 'reserved' AND worker_calls = 0`)
+					.run(timestamp, integrationAttemptId, ownerId);
+			if (changed.changes !== 1) throw new IntegrationInvocationConflictError('Integration preflight was settled concurrently');
 			return this.get(integrationAttemptId, ownerId);
 		})();
 	}
@@ -201,6 +232,8 @@ export class IntegrationInvocationStore {
 		if (row.owner_id !== ownerId) throw new IntegrationInvocationForbiddenError('Integration invocation belongs to another principal');
 		const gateRow = this.#db.prepare('SELECT results_json FROM integration_gate_runs WHERE invocation_id = ?')
 			.get(integrationAttemptId) as { results_json: string } | undefined;
+		const preflightRow = this.#db.prepare('SELECT result_json, created_at FROM integration_preflights WHERE invocation_id = ?')
+			.get(integrationAttemptId) as { result_json: string; created_at: string } | undefined;
 		return v.parse(IntegrationInvocationLeaseSchema, {
 			integrationAttemptId: row.id, ownerId: row.owner_id, assemblyId: row.assembly_id,
 			planSha256: row.plan_sha256, taskId: row.task_id, status: row.status,
@@ -208,22 +241,30 @@ export class IntegrationInvocationStore {
 			startedAt: row.started_at ?? undefined, finishedAt: row.finished_at ?? undefined,
 			outcome: row.outcome_json ? JSON.parse(row.outcome_json as string) : undefined,
 			gateResults: gateRow ? JSON.parse(gateRow.results_json) : undefined,
+			preflight: preflightRow ? { result: JSON.parse(preflightRow.result_json), createdAt: preflightRow.created_at } : undefined,
 		});
 	}
 
-	getGateParentContext(integrationAttemptId: string, ownerId: string): IntegrationGateParentContext {
+	getParentContext(integrationAttemptId: string, ownerId: string): IntegrationParentContext {
 		this.get(integrationAttemptId, ownerId);
-		const row = this.#db.prepare(`SELECT integration_assemblies.result_json, jobs.policy_snapshot_json
+		const row = this.#db.prepare(`SELECT integration_assemblies.result_json, jobs.policy_snapshot_json,
+			multi_worker_plans.base_commit
 			FROM integration_invocations
 			JOIN integration_assemblies ON integration_assemblies.id = integration_invocations.assembly_id
 			JOIN multi_worker_plans ON multi_worker_plans.id = integration_assemblies.plan_id
 			JOIN jobs ON jobs.id = multi_worker_plans.job_id
 			WHERE integration_invocations.id = ?`).get(integrationAttemptId) as {
-				result_json: string; policy_snapshot_json: string;
+				result_json: string; policy_snapshot_json: string; base_commit: string;
 			} | undefined;
 		if (!row) throw new IntegrationInvocationConflictError('Integration invocation has no complete gate parent chain');
 		const assembly = v.parse(IntegrationWorkspaceResultSchema, JSON.parse(row.result_json));
 		if (assembly.status !== 'assembled') throw new IntegrationInvocationConflictError('Integration invocation parent is not assembled');
-		return { workspacePath: assembly.workspacePath, repository: v.parse(RepositoryContractSchema, JSON.parse(row.policy_snapshot_json)) };
+		if (assembly.baseCommit !== row.base_commit) throw new IntegrationInvocationConflictError('Integration assembly base no longer matches its plan parent');
+		return {
+			workspacePath: assembly.workspacePath,
+			repository: v.parse(RepositoryContractSchema, JSON.parse(row.policy_snapshot_json)),
+			baseCommit: row.base_commit,
+			assemblyPatchSha256: assembly.patchSha256,
+		};
 	}
 }

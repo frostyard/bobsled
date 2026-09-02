@@ -98,7 +98,7 @@ export class IntegrationGateService {
 		if (lease.status !== 'awaiting_gates') throw new Error('Integration invocation is not awaiting trusted gates');
 		let parent;
 		try {
-			parent = this.#store.getGateParentContext(integrationAttemptId, ownerId);
+			parent = this.#store.getParentContext(integrationAttemptId, ownerId);
 		} catch (error) {
 			return this.#store.settleGates(integrationAttemptId, ownerId, [failedEvidence(
 				'policy', 'Integration gate parent', '[unavailable]',
