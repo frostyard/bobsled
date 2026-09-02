@@ -36,8 +36,11 @@ Linux is the canonical production runtime. Multi-repository changes are a first-
 - [x] Define a public-safe Caddy TLS boundary, raw-agent-route denial, and fail-closed activation sequence for the production hostname.
 - [x] Preserve local-trusted history through an explicit, conflict-checked, audited GitHub-principal cutover.
 - [x] Support fail-closed GitHub App private-key files so deployed PEM material bypasses dotenv and systemd parsing.
-- [ ] Complete the external HTTPS webhook and operator-authentication setup.
+- [x] Complete the external HTTPS webhook and operator-authentication setup.
+- [ ] Narrow the live GitHub App permissions to only those required by enabled capabilities.
 - [ ] Live-prove label/comment writes for an explicitly authorized repository while code publication remains disabled.
+
+External-setup evidence: authenticated HTTPS operator access, signed ping and automatic installation webhook admission, invalid-signature rejection, idempotent redelivery, private-key-file rotation with the predecessor revoked, and post-revocation installation-token minting all passed on Linux. Organization-wide installation coverage is an accepted operator decision for near-term expansion; Bobsled's enrolled-repository policy remains the execution boundary. Event-driven dispatch and GitHub mutations remain disabled while the live permission grant is broader than the declared capability policy.
 
 ### M2-L — Linux deployment foundation — `DONE`
 
@@ -107,7 +110,7 @@ M5 DAG-contract evidence: the versioned runtime schema bounds task content and c
 
 ## Current safety boundary
 
-- Private trusted use until GitHub authentication and a deliberate HTTPS boundary are complete.
+- Public ingress is bounded by Frostyard GitHub operator authentication and verified webhooks; event-triggered dispatch remains disabled until the live App permissions match capability policy.
 - Repository policies and deterministic gates outrank model recommendations.
 - Models cannot select arbitrary repositories or mutate repository policy.
 - Raw Flue observations and verified webhook bodies are sensitive operational records and are not exposed through a content API.
