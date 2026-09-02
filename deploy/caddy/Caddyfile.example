@@ -1,0 +1,24 @@
+# BOB SLED's public HTTPS boundary. Caddy obtains and renews the certificate.
+# BOBSLED_UPSTREAM is a non-secret private-network address such as host:3000.
+bobsled.frostyard.org {
+	encode zstd gzip
+
+	route {
+		# Agent protocol endpoints are internal implementation details. Operators use
+		# the authenticated board and its bounded control-plane API instead.
+		@raw_agent_routes path /agents /agents/*
+		respond @raw_agent_routes 404
+
+		reverse_proxy {$BOBSLED_UPSTREAM} {
+			health_uri /health
+			health_interval 30s
+			health_timeout 5s
+		}
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+}
