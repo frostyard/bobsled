@@ -61,3 +61,28 @@ test('rejects unenrolled repositories and missing authority before minting', asy
 	const unconfigured = new GitHubInstallationAuthority({});
 	await assert.rejects(unconfigured.withRequest('frostyard/clix', 'issue_metadata_read', async () => undefined), GitHubInstallationConfigurationError);
 });
+
+test('loads installation key material from the configured protected file', async () => {
+	let strategy: Record<string, unknown> | undefined;
+	let reads = 0;
+	const authority = new GitHubInstallationAuthority({
+		BOBSLED_GITHUB_APP_ID: '123',
+		BOBSLED_GITHUB_INSTALLATION_ID: '456',
+		BOBSLED_GITHUB_PRIVATE_KEY: 'stale-inline-key',
+		BOBSLED_GITHUB_PRIVATE_KEY_FILE: '/protected/github-app.pem',
+	}, ((options: Record<string, unknown>) => {
+		strategy = options;
+		return async () => ({
+			type: 'token', tokenType: 'installation', token: 'short-lived-token', installationId: 456,
+			createdAt: '2026-09-01T12:00:00Z', expiresAt: '2026-09-01T13:00:00Z',
+			permissions: { issues: 'read' }, repositorySelection: 'selected', repositoryIds: [1172846628],
+		});
+	}) as never, fetch, (path) => {
+		reads += 1;
+		assert.equal(path, '/protected/github-app.pem');
+		return 'complete-file-key\n';
+	});
+	await authority.withRequest('frostyard/clix', 'issue_metadata_read', async () => undefined);
+	assert.equal(reads, 1);
+	assert.deepEqual(strategy, { appId: 123, privateKey: 'complete-file-key' });
+});

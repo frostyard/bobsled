@@ -24,6 +24,8 @@ The systemd unit gives the service a read-only system view and permits writes on
 7. Normalize staged ownership and traversal permissions before activation; source archives can otherwise preserve restrictive developer modes.
 8. Back up durable databases and protected configuration separately from application releases. Treat verified webhook bodies and complete Flue observations as sensitive.
 
+Store the GitHub App private key as a separate PEM file rather than multiline dotenv content. A typical protected deployment uses `/etc/bobsled/github-app.pem`, owned by `root:bobsled` with mode `0640`, and sets `BOBSLED_GITHUB_PRIVATE_KEY_FILE=/etc/bobsled/github-app.pem`. Transfer the downloaded PEM directly to the host; do not paste it into chat, command arguments, logs, or repository files. After proving a newly generated key can mint a scoped installation token, revoke the superseded key in GitHub and remove any legacy `BOBSLED_GITHUB_PRIVATE_KEY` assignment.
+
 ## GitHub ingress
 
 GitHub integration requires a stable HTTPS origin and a narrowly configured reverse proxy or tunnel:
