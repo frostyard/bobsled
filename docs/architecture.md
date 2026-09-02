@@ -32,6 +32,12 @@ A multi-repository request becomes one `ChangeSet` containing a dependency graph
 
 Cross-repository publication is a barrier, not a distributed transaction: Bobsled holds draft publication until all jobs are publishable, then creates linked draft PRs and exposes partial failures explicitly.
 
+## M5 multi-worker planning
+
+The first M5 contract represents one repository-scoped plan as a versioned, schema-validated dependency DAG. Every task has a stable lowercase ID, bounded objective, acceptance criteria, and explicit in-plan dependencies. Trusted validation rejects duplicate IDs and edges, missing dependency targets, self-dependencies, and cycles. A deterministic helper derives dependency-readiness layers in declared task order.
+
+Dependency readiness is not execution authority. Tasks in the same layer are not considered safe to run concurrently until a later M5 policy adds non-overlapping file-scope ownership and conflict checks. This slice adds no worker fan-out, retry, workspace, token-spend, or GitHub capability.
+
 ## M2 durable ledger
 
 Bobsled workflow state lives in `bobsled.db` beneath `BOBSLED_DATA_DIR`, separate from Flue's conversation database. This avoids coupling product migrations to framework persistence and leaves either side replaceable.
