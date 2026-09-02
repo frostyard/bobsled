@@ -50,6 +50,10 @@ The bounded integration-worker contract declares a one-call budget for a known d
 
 This contract and runner are not yet connected to job orchestration or the operator UI. Required repository gates, durable ledger evidence, durable prevention of a repeated invocation, clean-stack execution, and a separate conflict-resolution path must exist before the roadmap's integration-worker item is complete.
 
+The first durable orchestration boundary reserves an integration invocation by principal, assembly UUID, plan digest, task ID, and idempotency key. A SQLite transaction may move it from `reserved` to `running` exactly once while atomically fixing `workerCalls` at one. Completion accepts only matching typed postcondition evidence; process failure is terminal historical evidence. Replays of the same reservation converge, while changed idempotency input, assembly reuse, concurrent claims, cross-principal access, and any attempt to reclaim terminal history fail closed. Recovery requires a new assembly and invocation rather than erasing or retrying the prior call.
+
+The lease is deliberately not yet a gate runner: M5 plans and assemblies still need a durable parent relation to the existing run/job model before gate artifacts can be attached without becoming orphaned evidence.
+
 ## M2 durable ledger
 
 Bobsled workflow state lives in `bobsled.db` beneath `BOBSLED_DATA_DIR`, separate from Flue's conversation database. This avoids coupling product migrations to framework persistence and leaves either side replaceable.
