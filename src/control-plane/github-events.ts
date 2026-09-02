@@ -56,6 +56,12 @@ export interface WebhookMetrics {
 	lastReceivedAt?: string;
 }
 
+export interface GitHubInstallationSnapshot {
+	repositorySelection?: string;
+	permissions: Record<string, string>;
+	recordedAt: string;
+}
+
 interface DeliveryRow {
 	delivery_id: string;
 	event_name: string;
@@ -211,6 +217,30 @@ export class GitHubEventStore {
 		const row = this.#db.prepare('SELECT payload_blob FROM github_webhook_deliveries WHERE delivery_id = ?')
 			.get(deliveryId) as { payload_blob: Buffer | null } | undefined;
 		return row?.payload_blob ? new Uint8Array(row.payload_blob) : undefined;
+	}
+
+	latestInstallationSnapshot(): GitHubInstallationSnapshot | undefined {
+		const row = this.#db.prepare(`SELECT repository_selection, permissions_json, recorded_at
+			FROM github_installation_snapshots ORDER BY id DESC LIMIT 1`).get() as {
+			repository_selection: string | null;
+			permissions_json: string;
+			recorded_at: string;
+		} | undefined;
+		if (!row) return undefined;
+		let permissions: unknown;
+		try {
+			permissions = JSON.parse(row.permissions_json);
+		} catch {
+			permissions = {};
+		}
+		const boundedPermissions = permissions && typeof permissions === 'object' && !Array.isArray(permissions)
+			? Object.fromEntries(Object.entries(permissions).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+			: {};
+		return {
+			repositorySelection: row.repository_selection ?? undefined,
+			permissions: boundedPermissions,
+			recordedAt: row.recorded_at,
+		};
 	}
 
 	metrics(): WebhookMetrics {

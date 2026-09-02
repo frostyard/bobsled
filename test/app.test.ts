@@ -127,6 +127,17 @@ test('reports GitHub App readiness without exposing credential values', async ()
 	assert.equal(Object.values(status).every((value) => typeof value === 'boolean'), true);
 });
 
+test('reports bounded GitHub App permission authority from verified snapshots', async () => {
+	const response = await app.request('/api/github-app/authority');
+	assert.equal(response.status, 200);
+	const audit = await response.json() as Record<string, unknown>;
+	assert.equal(['unobserved', 'within_policy', 'exceeds_policy'].includes(String(audit.status)), true);
+	assert.equal(Array.isArray(audit.excessPermissions), true);
+	for (const forbidden of ['installationId', 'accountLogin', 'deliveryId', 'permissions']) {
+		assert.equal(forbidden in audit, false);
+	}
+});
+
 test('keeps the Flue GitHub channel unavailable until its protected secret is configured', async () => {
 	const response = await app.request('/channels/github/webhook', { method: 'POST' });
 	assert.equal(response.status, 503);
@@ -179,6 +190,7 @@ test('GitHub mode exposes only the bounded unauthenticated ingress paths', async
 		assert.equal((await app.request('https://factory.example/api/github-app/status')).status, 200);
 		assert.equal((await app.request('https://factory.example/api/operator-auth/status')).status, 200);
 		assert.equal((await app.request('https://factory.example/auth/github/callback')).status, 400);
+		assert.equal((await app.request('https://factory.example/api/github-app/authority')).status, 401);
 		assert.equal((await app.request('https://factory.example/api/observability/status')).status, 401);
 		assert.equal((await app.request('https://factory.example/api/operator-board')).status, 401);
 	});
@@ -203,7 +215,9 @@ test('authenticated principals reach protected routes and mutations enforce orig
 		const html = await page.text();
 		assert.match(html, /GitHub<\/span><strong>@operator/);
 		assert.doesNotMatch(html, /github:999|member/);
+		assert.match(html, /id="authority-status"/);
 		assert.equal((await app.request('https://factory.example/api/runs', { headers })).status, 200);
+		assert.equal((await app.request('https://factory.example/api/github-app/authority', { headers })).status, 200);
 		assert.equal((await app.request('https://factory.example/api/runs', { method: 'POST', headers })).status, 403);
 		assert.equal((await app.request('https://factory.example/auth/logout', {
 			method: 'POST', headers: { ...headers, origin: 'https://factory.example' },

@@ -29,6 +29,9 @@ export function controlPlaneHtml(identity: ControlPlaneIdentity): string {
     .operator-chip { display:flex; align-items:center; gap:9px; border:1px solid #465148; border-radius:999px; padding:7px 10px; background:#151b17; font-size:.76rem; }
     .operator-chip::before { content:''; width:8px; height:8px; border-radius:50%; background:#6ee7b7; box-shadow:0 0 0 3px #6ee7b722; }
     .operator-provider { color:#8f9b90; text-transform:uppercase; letter-spacing:.08em; font-size:.64rem; }
+    .authority-status { margin:-16px 0 18px; border:1px solid #465148; padding:9px 12px; color:#9ba893; font-size:.72rem; }
+    .authority-status.within-policy { border-color:#6ee7b7; color:#8ff0c8; }
+    .authority-status.exceeds-policy { border-color:#ff887a; color:#ff9b8f; }
     .grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,.8fr); gap:18px; }
     .panel { border:1px solid #374039; background:rgba(20,25,22,.94); padding:20px; box-shadow:0 18px 60px #0006; }
     .ledger { margin-top:18px; }
@@ -121,6 +124,7 @@ export function controlPlaneHtml(identity: ControlPlaneIdentity): string {
 <body>
 <main>
   <header><div><div class="eyebrow">Frostyard engineering control plane</div><h1>BOB<span>SLED</span></h1></div><div class="header-context"><div class="eyebrow">M4-B · controlled publication</div><div class="operator-chip" aria-label="Authenticated operator"><span class="operator-provider">${escapeHtml(identityProvider)}</span><strong>${escapeHtml(identityLabel)}</strong></div></div></header>
+  <div id="authority-status" class="authority-status">GitHub App authority · loading latest verified installation snapshot…</div>
   <div class="grid">
     <section class="panel">
       <h2>Work intake</h2>
@@ -171,6 +175,7 @@ const boardRepo = document.querySelector('#board-repo');
 const drawerScrim = document.querySelector('#drawer-scrim');
 const drawerBody = document.querySelector('#drawer-body');
 const drawerActions = document.querySelector('#drawer-actions');
+const authorityStatus = document.querySelector('#authority-status');
 let boardCards = [];
 let boardPoll;
 
@@ -541,6 +546,25 @@ async function loadRuns() {
   } catch (error) { showError(error); }
 }
 
+async function loadAuthority() {
+  try {
+    const audit = await json('/api/github-app/authority');
+    authorityStatus.classList.remove('within-policy', 'exceeds-policy');
+    if (audit.status === 'unobserved') { authorityStatus.textContent = 'GitHub App authority · no verified installation snapshot observed yet.'; return; }
+    if (audit.status === 'within_policy') {
+      authorityStatus.classList.add('within-policy');
+      authorityStatus.textContent = 'GitHub App authority · observed permissions are within the declared capability ceiling.';
+      return;
+    }
+    authorityStatus.classList.add('exceeds-policy');
+    const names = audit.excessPermissions.map((permission) => permission.name).join(', ');
+    authorityStatus.textContent = 'GitHub App authority needs attention · permissions beyond the declared capability ceiling: ' + names + '.';
+  } catch {
+    authorityStatus.classList.add('exceeds-policy');
+    authorityStatus.textContent = 'GitHub App authority audit unavailable.';
+  }
+}
+
 async function triage(workItem) {
   submit.disabled = true; result.textContent = 'Triage agent is reasoning…';
   try {
@@ -574,7 +598,7 @@ try {
     const filterOption = document.createElement('option'); filterOption.value = value.id; filterOption.textContent = value.displayName + ' · ' + value.id; boardRepo.append(filterOption);
   }
   document.querySelector('#fixtures').click();
-  await loadRuns();
+  await Promise.all([loadRuns(), loadAuthority()]);
 } catch (error) { showError(error); }
 </script>
 </body>

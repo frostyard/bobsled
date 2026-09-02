@@ -37,6 +37,7 @@ Linux is the canonical production runtime. Multi-repository changes are a first-
 - [x] Preserve local-trusted history through an explicit, conflict-checked, audited GitHub-principal cutover.
 - [x] Support fail-closed GitHub App private-key files so deployed PEM material bypasses dotenv and systemd parsing.
 - [x] Complete the external HTTPS webhook and operator-authentication setup.
+- [x] Surface effective permission drift from verified installation snapshots without minting a token or exposing raw authority.
 - [ ] Narrow the live GitHub App permissions to only those required by enabled capabilities.
 - [ ] Live-prove label/comment writes for an explicitly authorized repository while code publication remains disabled.
 

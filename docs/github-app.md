@@ -47,6 +47,8 @@ The registered callback URL must be `<public-origin>/auth/github/callback`. Supp
 - Reject signed installation or repository payloads outside the `frostyard` organization.
 - Snapshot installation identity and effective permissions when admitting a job.
 
+The authenticated operator interface compares the latest verified installation snapshot with the union of Bobsled's typed capability profiles plus read-only organization membership. It reports only bounded permission drift and repository-selection context; it does not mint a token, expose installation identity, or return the raw webhook body. Organization-wide repository selection is accepted independently from permission-level drift.
+
 `GET /api/github-app/status` reports only whether required configuration is present. Supply credentials through the deployment's protected secret store; do not put them in source, shell commands, or chat.
 
 Prefer `BOBSLED_GITHUB_PRIVATE_KEY_FILE` over inline `BOBSLED_GITHUB_PRIVATE_KEY` in deployed services. Store the complete downloaded PEM as a separate root-owned file readable by the service group. A configured file path is authoritative and fails closed when unreadable; Bobsled never falls back to stale inline key material. This avoids dotenv quoting errors and prevents systemd from treating PEM continuation lines as separate environment assignments.

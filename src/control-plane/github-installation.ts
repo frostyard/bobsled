@@ -10,6 +10,51 @@ const permissionProfiles = {
 	commit_checks_read: { checks: 'read' },
 } as const;
 
+const declaredPermissionCeiling = {
+	metadata: 'read',
+	issues: 'write',
+	contents: 'write',
+	pull_requests: 'write',
+	checks: 'read',
+	members: 'read',
+} as const;
+
+const permissionRank: Record<string, number> = { read: 1, write: 2, admin: 3 };
+
+export interface GitHubPermissionExcess {
+	name: string;
+	granted: string;
+	maximum?: string;
+}
+
+export interface GitHubPermissionAudit {
+	status: 'unobserved' | 'within_policy' | 'exceeds_policy';
+	repositorySelection?: string;
+	observedAt?: string;
+	excessPermissions: GitHubPermissionExcess[];
+}
+
+export function auditGitHubPermissions(snapshot?: {
+	repositorySelection?: string;
+	permissions: Record<string, string>;
+	recordedAt: string;
+}): GitHubPermissionAudit {
+	if (!snapshot) return { status: 'unobserved', excessPermissions: [] };
+	const excessPermissions = Object.entries(snapshot.permissions)
+		.flatMap(([name, granted]) => {
+			const maximum = declaredPermissionCeiling[name as keyof typeof declaredPermissionCeiling];
+			if (maximum && permissionRank[granted] <= permissionRank[maximum]) return [];
+			return [{ name, granted, maximum }];
+		})
+		.sort((left, right) => left.name.localeCompare(right.name));
+	return {
+		status: excessPermissions.length === 0 ? 'within_policy' : 'exceeds_policy',
+		repositorySelection: snapshot.repositorySelection,
+		observedAt: snapshot.recordedAt,
+		excessPermissions,
+	};
+}
+
 export type GitHubInstallationCapability = keyof typeof permissionProfiles;
 
 export interface GitHubInstallationEnvironment {
