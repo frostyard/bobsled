@@ -18,6 +18,25 @@ const writableRepository = {
 	capabilities: { ...getRepository('frostyard/clix')!.capabilities, writeGitHub: true },
 } satisfies RepositoryContract;
 
+test('bobsled enrollment permits issue actions while code and publication stay disabled', () => {
+	const repository = getRepository('frostyard/bobsled');
+	assert.equal(repository?.readOnly, false);
+	assert.equal(repository?.capabilities.writeGitHub, true);
+	assert.equal(repository?.capabilities.writeCode, false);
+	assert.equal(repository?.executionPolicy.enabled, false);
+	assert.equal(repository?.reviewPolicy.enabled, false);
+	assert.equal(repository?.publicationPolicy.enabled, false);
+	const service = new GitHubIssueActionService({ path: ':memory:' });
+	try {
+		const action = service.admit({
+			kind: 'set_triage_label', repositoryId: 'frostyard/bobsled', issueNumber: 1, label: 'bobsled:ready',
+		}, owner, 'bobsled-policy-proof');
+		assert.equal(action.status, 'pending');
+	} finally {
+		service.close();
+	}
+});
+
 function fakeAuthority(request: typeof fetch = async () => Response.json({}), onUse?: () => void): GitHubInstallationAuthority {
 	return {
 		async withRequest<T>(repository: string, capability: string, use: (authority: ScopedInstallationAuthority) => Promise<T>) {

@@ -8,7 +8,7 @@ A Node.js [Flue v2](https://flueframework.com) agent team powered by the AI subs
 
 There are no model API keys and no CLI subprocess bridge. Flue uses Pi's native `openai-codex` and `github-copilot` providers directly.
 
-The first factory slice is now included: a read-only GitHub intake, typed repository and work-item contracts, a schema-constrained triage agent, and a local operator UI. The representative enrolled repository is `frostyard/clix`; this milestone cannot write labels, branches, issues, or pull requests.
+The first factory slice includes read-only GitHub intake, typed repository and work-item contracts, a schema-constrained triage agent, and an authenticated operator UI. `frostyard/clix` remains the representative code-work repository with GitHub mutation disabled. `frostyard/bobsled` is separately enrolled for policy-controlled issue labels and comments only; worker execution, code publication, and merge authority remain disabled there.
 
 M2 adds a durable, separately migratable job ledger, Flue-native verified/deduplicated webhook admission, full Flue observation retention, and a GitHub App operator identity boundary. Triaged work can be admitted, inspected, cancelled, superseded, or human-overridden from the UI. Model blocks remain advisory; public side effects remain disabled.
 
