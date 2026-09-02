@@ -97,6 +97,7 @@ Readiness evidence: local credentials and runtime state resolve outside the repo
 - [x] Define fail-closed integration assembly over trusted prerequisite patch evidence.
 - [x] Apply digest-verified prerequisite patch stacks in an isolated worktree with conflict evidence.
 - [x] Define one bounded integration-worker call and trusted postcondition disposition.
+- [x] Persist a principal-scoped one-use invocation lease before model dispatch.
 - [ ] Add an integration worker for dependent or conflicting changes.
 - [ ] Bound fan-out, retries, runtime, and subscription usage.
 
