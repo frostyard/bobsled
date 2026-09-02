@@ -74,7 +74,7 @@ Linux is the canonical production runtime. Multi-repository changes are a first-
 
 Readiness criterion: the repository contains only intentional public source, tests, templates, and generalized documentation. No credential, runtime database, embedded checkout, private infrastructure identifier, or private operational evidence is present in its first commit or history.
 
-Readiness evidence: local credentials and runtime state resolve outside the repository, tests use an isolated temporary runtime, both subscription credentials remain readable through the protected external store, all 80 deterministic tests pass on the minimum supported Node release, type checking and the production build pass, the package candidate is bounded, the production dependency audit reports no known vulnerabilities, and Gitleaks reports no leaks. CI repeats verification across supported Node lines and scans complete Git history. The standalone repository remains unpublished and has no configured remote.
+Readiness evidence: local credentials and runtime state resolve outside the repository, tests use an isolated temporary runtime, both subscription credentials remain readable through the protected external store, all 80 deterministic tests pass on the minimum supported Node release, type checking and the production build pass, the package candidate is bounded, the production dependency audit reports no known vulnerabilities, and Gitleaks reports no leaks. CI repeats verification across supported Node lines and scans complete Git history. The public repository is `frostyard/bobsled`; its first push passed every CI job and contained no forbidden sensitive path.
 
 ### M5 — Multi-worker plans — `PLANNED`
 
