@@ -1,0 +1,160 @@
+# Bobsled
+
+A Node.js [Flue v2](https://flueframework.com) agent team powered by the AI subscriptions you already have:
+
+- **CodexAgent** — OpenAI Codex through a ChatGPT Plus/Pro OAuth subscription.
+- **CopilotAgent** — GitHub Copilot through a Copilot OAuth subscription.
+- **Bobsled** — a Codex-led coding agent that can delegate independent review to a Copilot subagent.
+
+There are no model API keys and no CLI subprocess bridge. Flue uses Pi's native `openai-codex` and `github-copilot` providers directly.
+
+The first factory slice is now included: a read-only GitHub intake, typed repository and work-item contracts, a schema-constrained triage agent, and a local operator UI. The representative enrolled repository is `frostyard/clix`; this milestone cannot write labels, branches, issues, or pull requests.
+
+M2 adds a durable, separately migratable job ledger, Flue-native verified/deduplicated webhook admission, full Flue observation retention, and a GitHub App operator identity boundary. Triaged work can be admitted, inspected, cancelled, superseded, or human-overridden from the UI. Model blocks remain advisory; public side effects remain disabled.
+
+M3 adds explicit `Go fix this` authorization, disposable implementation worktrees, repository preparation/gates, and durable draft evidence. M4-A adds fresh-context Copilot review, at most one Codex remediation round, gate reruns, and a final independent verdict. M4-B adds exact-patch-bound, draft-only publication and required-check tracking in trusted code. Publication remains capability-blocked for clix and makes no GitHub request.
+
+See [ROADMAP.md](./ROADMAP.md) for durable milestone status and [docs/architecture.md](./docs/architecture.md) for the control-plane design, including multi-repository change sets.
+
+## Requirements
+
+- Node.js 22.19 or newer
+- An eligible ChatGPT subscription for Codex
+- A GitHub Copilot subscription
+
+## Setup
+
+```sh
+npm install
+npm run auth:codex
+npm run auth:copilot
+npm run auth:status
+```
+
+Run those commands from this directory. The local-runtime launcher stores Pi OAuth credentials outside the repository in the platform user-configuration directory and enforces the same protected path for refreshes. Credentials must never be committed, copied between hosts, or shared.
+
+On Linux and macOS the default local paths follow XDG conventions (falling back to `~/.config/bobsled` and `~/.local/share/bobsled`). The launcher loads `~/.config/bobsled/runtime.env` when it exists; set `BOBSLED_ENV_FILE`, `BOBSLED_AUTH_FILE`, `BOBSLED_DATA_DIR`, or `BOBSLED_WORKSPACE_DIR` to override these defaults. Copy `.env.example` to that external protected environment file rather than creating a live `.env` inside the repository. Do not put unrelated provider API keys in it: local workers must not inherit credentials they do not need.
+
+## Run an agent from the CLI
+
+The scripts pass any additional arguments through to `flue run`:
+
+```sh
+npm run agent:bobsled -- --message "Inspect this project and suggest the next improvement."
+npm run agent:codex -- --message "Explain the provider integration."
+npm run agent:copilot -- --message "Review the current TypeScript."
+```
+
+Use `--id` to continue a durable conversation:
+
+```sh
+npm run agent:bobsled -- --id demo --message "Inspect the project."
+npm run agent:bobsled -- --id demo --message "Now implement your top suggestion."
+```
+
+## Run the HTTP server
+
+```sh
+npm run dev
+```
+
+Open <http://127.0.0.1:5173/> to select clix, load its real open issues or local dry-run fixtures, enter a manual task, and receive a validated triage decision.
+
+Routes:
+
+- `POST /agents/bobsled/:conversationId`
+- `POST /agents/codex/:conversationId`
+- `POST /agents/copilot/:conversationId`
+- `GET /api/repositories`
+- `GET /api/repositories/:owner/:repository/issues`
+- `GET /api/repositories/:owner/:repository/fixtures`
+- `POST /api/triage`
+- `GET /api/runs`
+- `GET /api/runs/:runId`
+- `POST /api/runs`
+- `POST /api/runs/:runId/override`
+- `POST /api/runs/:runId/cancel`
+- `POST /api/runs/:runId/execute` (explicit local-only `Go fix this` authorization)
+- `POST /api/runs/:runId/review` (recovery surface; eligible changed runs enter review automatically)
+- `GET/POST /api/publications`
+- `POST /api/publications/:publicationId/execute` (policy- and App-gated draft-only publication)
+- `POST /api/publications/:publicationId/refresh-checks`
+- `GET /api/github-app/status`
+- `POST /channels/github/webhook` (the `@flue/github` channel; unavailable until its protected secret is configured)
+- `GET/POST /api/github-actions` and `GET /api/github-actions/:actionId`
+- `POST /api/github-actions/:actionId/execute` (policy-gated; clix remains blocked)
+- `GET /api/operator-auth/status`
+- `GET /auth/github/login` and `GET /auth/github/callback` (active only in configured GitHub mode)
+- `POST /auth/logout`
+- `GET /api/observability/status` (aggregate metadata only)
+- `GET /health`
+
+Example:
+
+```sh
+curl -X POST http://localhost:5173/agents/bobsled/demo \
+  -H 'content-type: application/json' \
+  -d '{"kind":"user","body":"Summarize this repository."}'
+```
+
+The development server is intended for trusted local use. These coding agents have Flue's `local()` sandbox, which deliberately grants access to the host workspace and shell. Add authentication and a real isolation boundary before exposing the server to other users or a network.
+
+The triage agent is not mounted as a public agent route. It has no sandbox and emits its final decision through a Valibot-validated Flue data writer. The application dispatches it only after resolving the repository from the enrolled registry.
+
+## Model selection
+
+Defaults:
+
+- Codex: `gpt-5.6-sol`
+- Copilot: `claude-sonnet-4.6`
+- Triage: `gpt-5.6-terra` through the Codex subscription
+- Implementation worker: Codex model, defaulting to `BOBSLED_CODEX_MODEL`
+
+Override these in the protected external environment file selected by `BOBSLED_ENV_FILE`:
+
+```dotenv
+BOBSLED_CODEX_MODEL=gpt-5.6-terra
+BOBSLED_COPILOT_MODEL=gpt-5.4
+BOBSLED_TRIAGE_MODEL=gpt-5.6-terra
+BOBSLED_WORKER_MODEL=gpt-5.6-sol
+```
+
+You can also point at a different Pi credential file:
+
+```dotenv
+BOBSLED_AUTH_FILE=/absolute/path/to/auth.json
+```
+
+## Verification
+
+```sh
+npm test
+npm run check:types
+npm run build
+```
+
+A live smoke test consumes subscription quota and requires completed OAuth setup:
+
+```sh
+npm run agent:bobsled -- --message "Reply with exactly: WITNESS ME"
+```
+
+## Design notes
+
+`src/providers.ts` adapts Pi's file-based OAuth login to Flue's in-memory provider registry. Credential refreshes and project login merges use one cross-process lock around the complete read-modify-write transaction, then replace the external credential file atomically with mode `0600`. Tokens are never exposed to the agents' sandbox environment.
+
+Flue conversations persist beneath `BOBSLED_DATA_DIR`. Provider credentials remain separate beneath the protected user-configuration directory unless `BOBSLED_AUTH_FILE` explicitly selects another external path.
+
+Bobsled's factory ledger, verified webhook inputs, and Flue observations persist in `bobsled.db` beneath `BOBSLED_DATA_DIR`. Treat that database as sensitive. See [docs/github-app.md](./docs/github-app.md) for the staged GitHub permission plan and [docs/observability.md](./docs/observability.md) for telemetry retention. Configuration/status responses expose booleans and aggregates only; credential values and raw telemetry never reach browser responses or agents.
+
+M3 attempt workspaces and evidence live outside immutable releases under `BOBSLED_WORKSPACE_DIR`. Each repository declares a trusted preparation command separately from its post-change gates; clix uses `mise install`, with mise supplied as a project runtime dependency. Preparation failures are recorded before any model call. Repositories also select a typed worker-network mode: `none` or credential-free `public_dependencies`. clix permits the latter for dependency maintenance. The worker still receives no GitHub credentials or SSH agent, and trusted code—not the model—computes the diff, checks protected paths and size limits, runs required gates, and settles the attempt.
+
+Workers classify results as `changed`, `no_change`, or `blocked`. Trusted evidence rejects disposition/diff mismatches. A verified no-change result with all required gates passing succeeds without inventing a patch and exposes no review or publication action.
+
+M4-A review records live beside the preserved implementation evidence. Copilot receives a bounded evidence bundle without a sandbox; it cannot alter the patch under review. A changes-requested verdict may dispatch one Codex remediation round. Trusted code then recomputes the patch, reruns clix's required `docs` and `verify` gates, and sends passing remediation to a new Copilot conversation for a final verdict. Review approval still grants no publication capability.
+
+M4-B publication is a separate durable outbox. Admission recomputes the preserved patch and binds its digest, approved review, base commit, generated branch, draft-only PR body marker, and required checks. Execution re-verifies those bytes before any token mint, uses repository-scoped Git Data and pull-request permissions, never force-pushes, and reconciles retries only against the exact deterministic commit. Check polling uses a separate read profile and can reach only `ready_for_human`; Bobsled has no merge operation. clix's publication policy remains disabled.
+
+`@flue/github` owns webhook content-type checks, exact-byte HMAC verification, native GitHub event typing, ping acknowledgement, and the conventional channel route. Bobsled's trusted wrapper retains the bounded exact body and durably claims the verified delivery before any later dispatch. The channel does not receive a global outbound token and currently dispatches no agent.
+
+The canonical production target is Linux. See [docs/linux-deployment.md](./docs/linux-deployment.md) for a generic unprivileged-container and systemd deployment contract. Public ingress is a separate, deliberate capability requiring authenticated operator access and verified GitHub webhooks.

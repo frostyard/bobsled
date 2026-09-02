@@ -1,0 +1,38 @@
+#cloud-config
+hostname: bobsled
+timezone: UTC
+package_update: true
+package_upgrade: true
+packages:
+  - build-essential
+  - ca-certificates
+  - curl
+  - git
+  - gnupg
+  - jq
+  - python3
+  - sqlite3
+  - unattended-upgrades
+
+write_files:
+  - path: /etc/apt/sources.list.d/nodesource.sources
+    content: |
+      Types: deb
+      URIs: https://deb.nodesource.com/node_24.x
+      Suites: nodistro
+      Components: main
+      Signed-By: /etc/apt/keyrings/nodesource.asc
+
+bootcmd:
+  - mkdir -p /etc/apt/keyrings
+  - '[ -s /etc/apt/keyrings/nodesource.asc ] || curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /etc/apt/keyrings/nodesource.asc'
+
+runcmd:
+  - apt-get install -y nodejs
+  - useradd --system --create-home --home-dir /var/lib/bobsled --shell /usr/sbin/nologin bobsled
+  - install -d -o root -g root -m 0755 /opt/bobsled /opt/bobsled/releases
+  - install -d -o root -g bobsled -m 0770 /etc/bobsled
+  - install -d -o bobsled -g bobsled -m 0700 /var/lib/bobsled/data /var/lib/bobsled/workspaces
+  - node --version > /var/lib/cloud/instance/bobsled-node-version
+
+final_message: "Bobsled Linux host provisioned in $UPTIME seconds"

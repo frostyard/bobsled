@@ -1,0 +1,58 @@
+{
+	"name": "bobsled",
+	"version": "0.1.0",
+	"description": "A typed software-development and maintenance factory built with Flue v2.",
+	"private": true,
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/frostyard/bobsled.git"
+	},
+	"homepage": "https://github.com/frostyard/bobsled#readme",
+	"bugs": {
+		"url": "https://github.com/frostyard/bobsled/issues"
+	},
+	"engines": {
+		"node": ">=22.19"
+	},
+	"type": "module",
+	"scripts": {
+		"dev": "node scripts/with-local-runtime.mjs vite dev",
+		"build": "vite build",
+		"start": "node dist/server.mjs",
+		"check:types": "tsc --noEmit",
+		"test": "node scripts/with-test-runtime.mjs tsx --test test/*.test.ts",
+		"auth:codex": "node scripts/with-local-runtime.mjs tsx scripts/auth-login.ts openai-codex",
+		"auth:copilot": "node scripts/with-local-runtime.mjs tsx scripts/auth-login.ts github-copilot",
+		"auth:status": "node scripts/with-local-runtime.mjs node scripts/auth-status.mjs",
+		"agent:codex": "node scripts/with-local-runtime.mjs flue run src/agents/codex.ts",
+		"agent:copilot": "node scripts/with-local-runtime.mjs flue run src/agents/copilot.ts",
+		"agent:bobsled": "node scripts/with-local-runtime.mjs flue run src/agents/bobsled.ts"
+	},
+	"dependencies": {
+		"@earendil-works/pi-ai": "^0.83.0",
+		"@flue/github": "^2.0.3",
+		"@flue/runtime": "^2.0.3",
+		"@octokit/auth-app": "^8.3.1",
+		"better-sqlite3": "^13.0.3",
+		"hono": "^4.7.0",
+		"mise": "^2026.9.0",
+		"proper-lockfile": "^4.1.2",
+		"tsx": "^4.23.13",
+		"valibot": "^1.4.2"
+	},
+	"devDependencies": {
+		"@flue/cli": "^2.0.3",
+		"@flue/vite": "^2.0.3",
+		"@types/better-sqlite3": "^9.6.0",
+		"@types/node": "^22.10.10",
+		"@types/proper-lockfile": "^4.1.4",
+		"typescript": "^7.0.2",
+		"vite": "^8.0.14"
+	},
+	"overrides": {
+		"@flue/github": {
+			"hono": "4.13.5"
+		}
+	}
+}

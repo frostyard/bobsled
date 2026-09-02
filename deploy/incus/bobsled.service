@@ -1,0 +1,38 @@
+[Unit]
+Description=Bobsled software factory control plane
+Documentation=https://github.com/frostyard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bobsled
+Group=bobsled
+WorkingDirectory=/opt/bobsled/current
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=BOBSLED_AUTH_FILE=/etc/bobsled/auth.json
+Environment=BOBSLED_DATA_DIR=/var/lib/bobsled/data
+Environment=BOBSLED_WORKSPACE_DIR=/var/lib/bobsled/workspaces
+Environment=BOBSLED_CLIX_SOURCE_PATH=/var/lib/bobsled/workspaces/sources/frostyard/clix
+Environment=HOME=/var/lib/bobsled
+ExecStart=/usr/bin/node dist/server.mjs
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=70s
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+ReadWritePaths=/etc/bobsled /var/lib/bobsled/data /var/lib/bobsled/workspaces
+
+[Install]
+WantedBy=multi-user.target
