@@ -26,7 +26,7 @@ Linux is the canonical production runtime. Multi-repository changes are a first-
 - Sandboxed triage with no GitHub mutation capability.
 - Operator interface for repository selection, issues, manual tasks, and dry-run triage.
 
-### M2 — GitHub App and durable job ledger — `ACTIVE`
+### M2 — GitHub App and durable job ledger — `DONE`
 
 - [x] Durable runs, attempts, artifacts, approvals, audit events, cancellation, supersession, and human override.
 - [x] Verified and deduplicated webhook admission with exact-input retention.
@@ -40,11 +40,13 @@ Linux is the canonical production runtime. Multi-repository changes are a first-
 - [x] Surface effective permission drift from verified installation snapshots without minting a token or exposing raw authority.
 - [x] Narrow the live GitHub App permissions to only those required by enabled capabilities.
 - [x] Enroll Bobsled itself for issue metadata writes while worker execution, publication, and merge remain disabled.
-- [ ] Live-prove label/comment writes for an explicitly authorized repository while code publication remains disabled.
+- [x] Live-prove label/comment writes for an explicitly authorized repository while code publication remains disabled.
 
-External-setup evidence: authenticated HTTPS operator access, signed ping and automatic installation webhook admission, invalid-signature rejection, idempotent redelivery, private-key-file rotation with the predecessor revoked, and post-revocation installation-token minting all passed on Linux. Organization-wide installation coverage is an accepted operator decision for near-term expansion; Bobsled's enrolled-repository policy remains the execution boundary. Event-driven dispatch and GitHub mutations remain disabled pending their separate policy and live-proof steps.
+External-setup evidence: authenticated HTTPS operator access, signed ping and automatic installation webhook admission, invalid-signature rejection, idempotent redelivery, private-key-file rotation with the predecessor revoked, and post-revocation installation-token minting all passed on Linux. Organization-wide installation coverage is an accepted operator decision for near-term expansion; Bobsled's enrolled-repository policy remains the execution boundary. Event-driven dispatch and code publication remain disabled.
 
 Permission-narrowing evidence: GitHub automatically delivered each reduction as a verified installation update, and the latest retained snapshot reports organization-wide repository coverage with no permission above Bobsled's declared capability ceiling.
+
+Issue-action evidence: the explicitly authorized temporary [Bobsled issue #17](https://github.com/frostyard/bobsled/issues/17) received one bounded route label and one marker-bearing comment. A simulated interruption after GitHub accepted the comment left the durable action retryable; the next attempt recovered the existing marker without another comment POST, and subsequent label/comment execution made no additional requests. The issue was then closed, while worker execution, review, publication, force-push, and merge remained disabled by repository policy.
 
 ### M2-L — Linux deployment foundation — `DONE`
 
@@ -114,7 +116,7 @@ M5 DAG-contract evidence: the versioned runtime schema bounds task content and c
 
 ## Current safety boundary
 
-- Public ingress is bounded by Frostyard GitHub operator authentication and verified webhooks; event-triggered dispatch remains disabled until the live App permissions match capability policy.
+- Public ingress is bounded by Frostyard GitHub operator authentication and verified webhooks; event-triggered dispatch remains disabled, and GitHub mutations require explicit enrolled policy plus the durable action outbox.
 - Repository policies and deterministic gates outrank model recommendations.
 - Models cannot select arbitrary repositories or mutate repository policy.
 - Raw Flue observations and verified webhook bodies are sensitive operational records and are not exposed through a content API.
