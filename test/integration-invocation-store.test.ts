@@ -4,12 +4,14 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import Database from 'better-sqlite3';
 import {
 	IntegrationInvocationConflictError,
 	IntegrationInvocationForbiddenError,
 	IntegrationInvocationStore,
 } from '../src/control-plane/integration-invocation-store.ts';
 import { JobLedger } from '../src/control-plane/ledger.ts';
+import { IntegrationGateService } from '../src/control-plane/integration-gate-service.ts';
 import {
 	MultiWorkerParentConflictError,
 	MultiWorkerParentForbiddenError,
@@ -52,7 +54,7 @@ function fixture() {
 	}, ownerId);
 	parents.close();
 	return {
-		path, planId, assemblyId, planSha256: parent.planSha256,
+		root, path, planId, assemblyId, planSha256: parent.planSha256,
 		reservation: { integrationAttemptId: randomUUID(), assemblyId, planSha256: parent.planSha256, taskId: 'integration' },
 	};
 }
@@ -91,10 +93,151 @@ test('persists a one-use invocation from reservation through terminal evidence',
 		assert.equal(store.reserve(input, ownerId, 'same-request').status, 'reserved');
 		assert.equal(store.claim(input.integrationAttemptId, ownerId).workerCalls, 1);
 		const completed = store.complete(input.integrationAttemptId, ownerId, outcome(input.integrationAttemptId));
-		assert.equal(completed.status, 'succeeded');
+		assert.equal(completed.status, 'awaiting_gates');
 		assert.deepEqual(completed.outcome, outcome(input.integrationAttemptId));
 		assert.throws(() => store.claim(input.integrationAttemptId, ownerId), IntegrationInvocationConflictError);
 		assert.throws(() => store.complete(input.integrationAttemptId, ownerId, outcome(input.integrationAttemptId)), IntegrationInvocationConflictError);
+	} finally { store.close(); }
+});
+
+test('runs required gates in policy order and settles durable success evidence', async () => {
+	const value = fixture();
+	const store = new IntegrationInvocationStore(value.path);
+	try {
+		store.reserve(value.reservation, ownerId, 'request');
+		store.claim(value.reservation.integrationAttemptId, ownerId);
+		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
+		const commands: string[] = [];
+		const workspaces: string[] = [];
+		const timeouts: number[] = [];
+		const service = new IntegrationGateService(store, async (command, context, timeoutMs) => {
+			commands.push(command);
+			workspaces.push(context.workspacePath);
+			timeouts.push(timeoutMs);
+			return { status: 'passed', exitCode: 0, durationMs: 1, stdout: 'ok', stderr: '', truncated: false };
+		});
+		await assert.rejects(() => service.run(value.reservation.integrationAttemptId, 'different-operator'), IntegrationInvocationForbiddenError);
+		const settled = await service.run(value.reservation.integrationAttemptId, ownerId);
+		assert.equal(settled.status, 'succeeded');
+		assert.deepEqual(commands, ['npm test', 'npm run check:types', 'npm run build']);
+		assert.deepEqual(workspaces, [join(value.root, 'workspace'), join(value.root, 'workspace'), join(value.root, 'workspace')]);
+		assert.deepEqual(timeouts, [900_000, 900_000, 900_000]);
+		assert.deepEqual(settled.gateResults?.map(({ status }) => status), ['passed', 'passed', 'passed']);
+		await assert.rejects(() => service.run(value.reservation.integrationAttemptId, ownerId));
+	} finally { store.close(); }
+});
+
+test('stops at the first failed gate and settles the invocation blocked', async () => {
+	const value = fixture();
+	const store = new IntegrationInvocationStore(value.path);
+	try {
+		store.reserve(value.reservation, ownerId, 'request');
+		store.claim(value.reservation.integrationAttemptId, ownerId);
+		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
+		let calls = 0;
+		const service = new IntegrationGateService(store, async () => {
+			calls += 1;
+			return calls === 2
+				? { status: 'failed', exitCode: 1, durationMs: 1, stdout: '', stderr: 'failed', truncated: false }
+				: { status: 'passed', exitCode: 0, durationMs: 1, stdout: 'ok', stderr: '', truncated: false };
+		});
+		const settled = await service.run(value.reservation.integrationAttemptId, ownerId);
+		assert.equal(settled.status, 'blocked');
+		assert.equal(settled.gateResults?.length, 2);
+		assert.equal(calls, 2);
+	} finally { store.close(); }
+});
+
+test('records runner failures as terminal gate evidence instead of stranding the invocation', async () => {
+	const value = fixture();
+	const store = new IntegrationInvocationStore(value.path);
+	try {
+		store.reserve(value.reservation, ownerId, 'request');
+		store.claim(value.reservation.integrationAttemptId, ownerId);
+		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
+		const service = new IntegrationGateService(store, async () => { throw new Error('runner unavailable'); });
+		const settled = await service.run(value.reservation.integrationAttemptId, ownerId);
+		assert.equal(settled.status, 'blocked');
+		assert.equal(settled.gateResults?.[0]?.status, 'failed');
+		assert.match(settled.gateResults?.[0]?.stderr ?? '', /runner unavailable/);
+	} finally { store.close(); }
+});
+
+test('persists a trusted gate timeout as terminal blocked evidence', async () => {
+	const value = fixture();
+	const store = new IntegrationInvocationStore(value.path);
+	try {
+		store.reserve(value.reservation, ownerId, 'request');
+		store.claim(value.reservation.integrationAttemptId, ownerId);
+		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
+		const service = new IntegrationGateService(store, async () => ({
+			status: 'timed_out', exitCode: null, durationMs: 900_000, stdout: '', stderr: '', truncated: false,
+		}));
+		const settled = await service.run(value.reservation.integrationAttemptId, ownerId);
+		assert.equal(settled.status, 'blocked');
+		assert.equal(settled.gateResults?.[0]?.status, 'timed_out');
+		assert.equal(settled.gateResults?.length, 1);
+	} finally { store.close(); }
+});
+
+test('fails workspace-mutating required gates closed without executing them', async () => {
+	const value = fixture();
+	const db = new Database(value.path);
+	const row = db.prepare('SELECT id, policy_snapshot_json FROM jobs LIMIT 1').get() as { id: string; policy_snapshot_json: string };
+	const policy = JSON.parse(row.policy_snapshot_json) as { qualityGates: Array<{ id: string; mutatesWorkspace: boolean }> };
+	const required = policy.qualityGates.find(({ id }) => id === 'test');
+	assert.ok(required);
+	required.mutatesWorkspace = true;
+	db.prepare('UPDATE jobs SET policy_snapshot_json = ? WHERE id = ?').run(JSON.stringify(policy), row.id);
+	db.close();
+	const store = new IntegrationInvocationStore(value.path);
+	try {
+		store.reserve(value.reservation, ownerId, 'request');
+		store.claim(value.reservation.integrationAttemptId, ownerId);
+		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
+		let calls = 0;
+		const service = new IntegrationGateService(store, async () => {
+			calls += 1;
+			return { status: 'passed', exitCode: 0, durationMs: 1, stdout: '', stderr: '', truncated: false };
+		});
+		const settled = await service.run(value.reservation.integrationAttemptId, ownerId);
+		assert.equal(settled.status, 'blocked');
+		assert.equal(calls, 0);
+		assert.match(settled.gateResults?.[0]?.stderr ?? '', /Workspace-mutating/);
+	} finally { store.close(); }
+});
+
+test('turns an unreadable durable parent into blocked evidence', async () => {
+	const value = fixture();
+	const store = new IntegrationInvocationStore(value.path);
+	store.reserve(value.reservation, ownerId, 'request');
+	store.claim(value.reservation.integrationAttemptId, ownerId);
+	store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
+	store.close();
+	const db = new Database(value.path);
+	db.prepare("UPDATE jobs SET policy_snapshot_json = '{'").run();
+	db.close();
+	const reopened = new IntegrationInvocationStore(value.path);
+	try {
+		const settled = await new IntegrationGateService(reopened, async () => {
+			throw new Error('must not execute');
+		}).run(value.reservation.integrationAttemptId, ownerId);
+		assert.equal(settled.status, 'blocked');
+		assert.equal(settled.gateResults?.[0]?.id, 'policy');
+	} finally { reopened.close(); }
+});
+
+test('rejects gate settlement before worker success and prevents replay', () => {
+	const value = fixture();
+	const store = new IntegrationInvocationStore(value.path);
+	const result = { id: 'test', name: 'Test', command: 'npm test', status: 'passed' as const, exitCode: 0, durationMs: 1, stdout: '', stderr: '', truncated: false };
+	try {
+		store.reserve(value.reservation, ownerId, 'request');
+		assert.throws(() => store.settleGates(value.reservation.integrationAttemptId, ownerId, [result]), IntegrationInvocationConflictError);
+		store.claim(value.reservation.integrationAttemptId, ownerId);
+		store.complete(value.reservation.integrationAttemptId, ownerId, outcome(value.reservation.integrationAttemptId));
+		assert.equal(store.settleGates(value.reservation.integrationAttemptId, ownerId, [result]).status, 'succeeded');
+		assert.throws(() => store.settleGates(value.reservation.integrationAttemptId, ownerId, [result]), IntegrationInvocationConflictError);
 	} finally { store.close(); }
 });
 
