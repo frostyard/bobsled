@@ -76,12 +76,14 @@ Readiness criterion: the repository contains only intentional public source, tes
 
 Readiness evidence: local credentials and runtime state resolve outside the repository, tests use an isolated temporary runtime, both subscription credentials remain readable through the protected external store, all 80 deterministic tests pass on the minimum supported Node release, type checking and the production build pass, the package candidate is bounded, the production dependency audit reports no known vulnerabilities, and Gitleaks reports no leaks. CI repeats verification across supported Node lines and scans complete Git history. The public repository is `frostyard/bobsled`; its first push passed every CI job and contained no forbidden sensitive path.
 
-### M5 — Multi-worker plans — `PLANNED`
+### M5 — Multi-worker plans — `ACTIVE`
 
-- Represent work as a typed dependency DAG.
-- Assign non-overlapping file scopes to parallel workers.
-- Add an integration worker for dependent or conflicting changes.
-- Bound fan-out, retries, runtime, and subscription usage.
+- [x] Represent work as a typed dependency DAG.
+- [ ] Assign non-overlapping file scopes to parallel workers.
+- [ ] Add an integration worker for dependent or conflicting changes.
+- [ ] Bound fan-out, retries, runtime, and subscription usage.
+
+M5 DAG-contract evidence: the versioned runtime schema bounds task content and count, requires stable IDs and acceptance criteria, and rejects duplicate IDs/edges, missing targets, self-dependencies, and cycles. Deterministic dependency layers preserve declared order, but deliberately grant no parallel-execution authority before file-scope ownership exists.
 
 ### M6 — Multi-repository change sets — `PLANNED`
 
