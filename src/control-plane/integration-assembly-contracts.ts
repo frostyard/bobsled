@@ -58,8 +58,16 @@ export const IntegrationAssemblyPlanSchema = v.pipe(
 	}),
 	v.check((plan) => plan.ready === (plan.blockers.length === 0), 'Integration readiness must agree with its blockers'),
 	v.check(
+		(plan) => new Set(plan.prerequisiteTaskIds).size === plan.prerequisiteTaskIds.length,
+		'Integration prerequisite task IDs must be unique',
+	),
+	v.check(
 		(plan) => plan.ready ? plan.orderedPatches.length === plan.prerequisiteTaskIds.length : plan.orderedPatches.length === 0,
 		'Ready integration plans require every ordered patch; blocked plans cannot expose an assembly stack',
+	),
+	v.check(
+		(plan) => !plan.ready || plan.orderedPatches.every((patch, index) => patch.taskId === plan.prerequisiteTaskIds[index]),
+		'Integration patch order must exactly match prerequisite task order',
 	),
 );
 

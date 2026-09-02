@@ -128,4 +128,16 @@ test('typed evidence cannot claim readiness without a complete patch stack', () 
 		blockers: [],
 		executionAuthorized: false,
 	}));
+	assert.throws(() => v.parse(IntegrationAssemblyPlanSchema, {
+		taskId: 'integration',
+		baseCommit,
+		prerequisiteTaskIds: ['api', 'ui'],
+		orderedPatches: [
+			{ taskId: 'ui', patchSha256: 'b'.repeat(64), changedPaths: ['src/ui/view.ts'] },
+			{ taskId: 'api', patchSha256: 'c'.repeat(64), changedPaths: ['src/api/client.ts'] },
+		],
+		ready: true,
+		blockers: [],
+		executionAuthorized: false,
+	}));
 });
