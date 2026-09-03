@@ -12,6 +12,7 @@ import {
 	MultiWorkerBudgetStore,
 } from '../src/control-plane/multi-worker-budget-store.ts';
 import { MultiWorkerParentStore } from '../src/control-plane/multi-worker-parent-store.ts';
+import { MultiWorkerScheduler } from '../src/control-plane/multi-worker-scheduler.ts';
 
 const ownerId = 'operator';
 
@@ -35,7 +36,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
 		maxWorkerAttempts: 4,
 		maxPreDispatchRetriesPerTask: 1,
 		maxRuntimeMinutes: 60,
-		subscriptionCalls: { openaiCodex: 1, githubCopilot: 1 },
+		subscriptionCalls: { openaiCodex: 3, githubCopilot: 1 },
 		...overrides,
 	};
 	db.prepare('UPDATE jobs SET policy_snapshot_json = ? WHERE id = ?').run(JSON.stringify(repository), jobId);
@@ -49,6 +50,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
 			tasks: [
 				{ id: 'api', title: 'API', objective: 'Build API.', acceptanceCriteria: ['API passes.'], dependsOn: [], fileScopes: [{ kind: 'directory', path: 'src/api' }] },
 				{ id: 'ui', title: 'UI', objective: 'Build UI.', acceptanceCriteria: ['UI passes.'], dependsOn: [], fileScopes: [{ kind: 'directory', path: 'src/ui' }] },
+				{ id: 'integration', title: 'Integration', objective: 'Join API and UI.', acceptanceCriteria: ['Integration passes.'], dependsOn: ['api', 'ui'], fileScopes: [{ kind: 'directory', path: 'src/integration' }] },
 			],
 		},
 	}, ownerId, 'plan');
@@ -71,8 +73,117 @@ test('snapshots the immutable repository budget and bounds concurrent workspace 
 	} finally { first.close(); second.close(); }
 });
 
-test('consumes provider allowance atomically and forbids retries after dispatch', () => {
+test('distinguishes a new reservation from an idempotent cross-process replay', () => {
 	const value = fixture();
+	const first = new MultiWorkerBudgetStore(value.path);
+	const second = new MultiWorkerBudgetStore(value.path);
+	try {
+		first.initialize(value.planId, ownerId);
+		const request = { attemptId: randomUUID(), planId: value.planId, taskId: 'api', provider: 'openai-codex' };
+		assert.equal(first.reserveAttemptClaim(request, ownerId, 'shared').newlyReserved, true);
+		assert.equal(second.reserveAttemptClaim(request, ownerId, 'shared').newlyReserved, false);
+	} finally { first.close(); second.close(); }
+});
+
+test('schedules only dependency-ready tasks within concurrency and converges on replay', () => {
+	const value = fixture();
+	const parents = new MultiWorkerParentStore(value.path);
+	const budgets = new MultiWorkerBudgetStore(value.path);
+	const scheduler = new MultiWorkerScheduler(parents, budgets);
+	try {
+		const first = scheduler.schedule(value.planId, ownerId);
+		assert.equal(first.status, 'scheduled');
+		assert.deepEqual(first.scheduled.map(({ taskId }) => taskId), ['api', 'ui']);
+		assert.deepEqual(first.tasks.map(({ state }) => state), ['preparing', 'preparing', 'queued']);
+		assert.equal(first.executionAuthorized, false);
+		assert.equal(first.modelDispatchAuthorized, false);
+		const replay = scheduler.schedule(value.planId, ownerId);
+		assert.equal(replay.status, 'waiting');
+		assert.equal(replay.scheduled.length, 0);
+		assert.equal(budgets.listAttempts(value.planId, ownerId).length, 2);
+	} finally { budgets.close(); parents.close(); }
+});
+
+test('unlocks dependent work only after every prerequisite succeeds', () => {
+	const value = fixture();
+	const parents = new MultiWorkerParentStore(value.path);
+	const budgets = new MultiWorkerBudgetStore(value.path);
+	const scheduler = new MultiWorkerScheduler(parents, budgets);
+	try {
+		const roots = scheduler.schedule(value.planId, ownerId).scheduled;
+		for (const attempt of roots) {
+			budgets.claimDispatch(attempt.attemptId, ownerId);
+			budgets.settleAfterDispatch(attempt.attemptId, ownerId, 'succeeded');
+		}
+		const integration = scheduler.schedule(value.planId, ownerId);
+		assert.deepEqual(integration.scheduled.map(({ taskId }) => taskId), ['integration']);
+		assert.deepEqual(integration.tasks.map(({ state }) => state), ['succeeded', 'succeeded', 'preparing']);
+	} finally { budgets.close(); parents.close(); }
+});
+
+test('projects terminal prerequisite failure without scheduling descendants', () => {
+	const value = fixture();
+	const parents = new MultiWorkerParentStore(value.path);
+	const budgets = new MultiWorkerBudgetStore(value.path);
+	const scheduler = new MultiWorkerScheduler(parents, budgets);
+	try {
+		const roots = scheduler.schedule(value.planId, ownerId).scheduled;
+		for (const attempt of roots) {
+			budgets.claimDispatch(attempt.attemptId, ownerId);
+			budgets.settleAfterDispatch(attempt.attemptId, ownerId, attempt.taskId === 'api' ? 'blocked' : 'succeeded', attempt.taskId === 'api' ? 'scope violation' : undefined);
+		}
+		const result = scheduler.schedule(value.planId, ownerId);
+		assert.equal(result.status, 'blocked');
+		assert.equal(result.scheduled.length, 0);
+		assert.deepEqual(result.tasks.map(({ state }) => state), ['blocked', 'succeeded', 'blocked']);
+		assert.match(result.tasks[2]?.reason ?? '', /Dependency api/);
+	} finally { budgets.close(); parents.close(); }
+});
+
+test('projects disabled and exhausted policies as terminal scheduler evidence', () => {
+	const disabled = fixture({ enabled: false });
+	const disabledParents = new MultiWorkerParentStore(disabled.path);
+	const disabledBudgets = new MultiWorkerBudgetStore(disabled.path);
+	try {
+		const result = new MultiWorkerScheduler(disabledParents, disabledBudgets).schedule(disabled.planId, ownerId);
+		assert.equal(result.status, 'blocked');
+		assert.equal(result.scheduled.length, 0);
+		assert.ok(result.tasks.every(({ state }) => state === 'blocked'));
+		assert.match(result.reasons[0] ?? '', /disabled/);
+	} finally { disabledBudgets.close(); disabledParents.close(); }
+
+	const exhausted = fixture({ maxPreDispatchRetriesPerTask: 0 });
+	const parents = new MultiWorkerParentStore(exhausted.path);
+	const budgets = new MultiWorkerBudgetStore(exhausted.path);
+	const scheduler = new MultiWorkerScheduler(parents, budgets);
+	try {
+		const api = scheduler.schedule(exhausted.planId, ownerId).scheduled.find(({ taskId }) => taskId === 'api');
+		assert.ok(api);
+		budgets.settlePreDispatchFailure(api.attemptId, ownerId, 'workspace failed');
+		const result = scheduler.schedule(exhausted.planId, ownerId);
+		assert.equal(result.status, 'waiting');
+		assert.equal(result.tasks.find(({ taskId }) => taskId === 'api')?.state, 'blocked');
+		assert.equal(result.tasks.find(({ taskId }) => taskId === 'integration')?.state, 'blocked');
+		assert.match(result.reasons[0] ?? '', /retry budget is exhausted/);
+	} finally { budgets.close(); parents.close(); }
+});
+
+test('schedules a same-provider retry only after zero-call pre-dispatch failure', () => {
+	const value = fixture();
+	const parents = new MultiWorkerParentStore(value.path);
+	const budgets = new MultiWorkerBudgetStore(value.path);
+	const scheduler = new MultiWorkerScheduler(parents, budgets);
+	try {
+		const api = scheduler.schedule(value.planId, ownerId).scheduled.find(({ taskId }) => taskId === 'api');
+		assert.ok(api);
+		budgets.settlePreDispatchFailure(api.attemptId, ownerId, 'workspace failed');
+		const retry = scheduler.schedule(value.planId, ownerId).scheduled;
+		assert.deepEqual(retry.map(({ taskId, attemptNumber }) => [taskId, attemptNumber]), [['api', 2]]);
+	} finally { budgets.close(); parents.close(); }
+});
+
+test('consumes provider allowance atomically and forbids retries after dispatch', () => {
+	const value = fixture({ subscriptionCalls: { openaiCodex: 1, githubCopilot: 1 } });
 	const first = new MultiWorkerBudgetStore(value.path);
 	const second = new MultiWorkerBudgetStore(value.path);
 	try {
