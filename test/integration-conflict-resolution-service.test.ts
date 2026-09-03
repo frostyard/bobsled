@@ -21,6 +21,11 @@ import { IntegrationConflictPromotionService } from '../src/control-plane/integr
 import { IntegrationInvocationStore } from '../src/control-plane/integration-invocation-store.ts';
 import { IntegrationConflictAgentInvocationStore } from '../src/control-plane/integration-conflict-agent-invocation-store.ts';
 import { IntegrationConflictAgentPreflightService } from '../src/control-plane/integration-conflict-agent-preflight-service.ts';
+import { IntegrationConflictAgentOrchestrationService } from '../src/control-plane/integration-conflict-agent-orchestration-service.ts';
+import type {
+	IntegrationConflictAgentInitialData,
+	IntegrationConflictAgentOutcome,
+} from '../src/control-plane/integration-conflict-agent-contracts.ts';
 import { getRepository } from '../src/control-plane/repositories.ts';
 
 function git(cwd: string, args: string[]): string {
@@ -96,9 +101,10 @@ test('preserves unresolved conflict markers as blocked evidence without model au
 	assert.equal(result.replayManifest?.orderedPatches.length, 2);
 });
 
-async function durableBlockedResolution() {
+async function durableBlockedResolution(includeRemainingPatch = false) {
 	const value = fixture();
 	const payloads = [patch(value.source, 5, 'task one', 'one'), patch(value.source, 5, 'task two', 'two')];
+	if (includeRemainingPatch) payloads.push(patch(value.source, 7, 'task three', 'three'));
 	const assemblyPlan = plan(value.baseCommit, payloads);
 	const rejected = await rejectedAssembly(value, payloads);
 	const resolutionId = randomUUID();
@@ -134,7 +140,8 @@ async function durableBlockedResolution() {
 			tasks: [
 				{ id: 'one', title: 'One', objective: 'First change.', acceptanceCriteria: ['First passes.'], dependsOn: [], fileScopes: [{ kind: 'repository' }] },
 				{ id: 'two', title: 'Two', objective: 'Second change.', acceptanceCriteria: ['Second passes.'], dependsOn: ['one'], fileScopes: [{ kind: 'repository' }] },
-				{ id: 'integration', title: 'Integration', objective: 'Integrate.', acceptanceCriteria: ['Stack passes.'], dependsOn: ['two'], fileScopes: [{ kind: 'repository' }] },
+				...(includeRemainingPatch ? [{ id: 'three', title: 'Three', objective: 'Third change.', acceptanceCriteria: ['Third passes.'], dependsOn: ['two'], fileScopes: [{ kind: 'repository' as const }] }] : []),
+				{ id: 'integration', title: 'Integration', objective: 'Integrate.', acceptanceCriteria: ['Stack passes.'], dependsOn: [includeRemainingPatch ? 'three' : 'two'], fileScopes: [{ kind: 'repository' }] },
 			],
 		},
 	}, 'operator', 'agent-conflict-plan');
@@ -142,6 +149,41 @@ async function durableBlockedResolution() {
 	parents.recordConflictResolution({ resolutionId, sourceAssemblyId: rejected.assemblyId, result }, 'operator');
 	parents.close();
 	return { ...value, databasePath, result };
+}
+
+function passingConflictPreflight(
+	store: IntegrationConflictAgentInvocationStore,
+	workspaceRoot: string,
+): IntegrationConflictAgentPreflightService {
+	return new IntegrationConflictAgentPreflightService(store, {
+		workspaceRoot,
+		runner: async () => ({
+			status: 'passed', exitCode: 0, durationMs: 1, stdout: 'prepared', stderr: '', truncated: false,
+		}),
+	});
+}
+
+function workerOutcome(
+	input: IntegrationConflictAgentInitialData,
+	disposition: 'resolved' | 'blocked' = 'resolved',
+): IntegrationConflictAgentOutcome {
+	return {
+		conversationId: `test-${input.agentAttemptId}`,
+		submissionId: randomUUID(),
+		result: {
+			disposition,
+			summary: disposition === 'resolved' ? 'Resolved the authenticated conflict.' : 'Could not resolve safely.',
+			resolvedPaths: disposition === 'resolved' ? [...input.conflictPaths] : [],
+			testsRun: [], notes: [],
+		},
+		text: '',
+	};
+}
+
+function writeResolvedShared(workspacePath: string): void {
+	const lines = Array.from({ length: 9 }, (_, index) => `line ${index + 1}`);
+	lines[4] = 'resolved task one and task two';
+	writeFileSync(join(workspacePath, 'shared.txt'), `${lines.join('\n')}\n`);
 }
 
 test('replays authenticated conflict evidence in a fresh prepared workspace before model claim', async () => {
@@ -215,6 +257,134 @@ test('blocks failed preparation and authenticated patch tampering without model 
 		assert.equal(lease.modelCalls, 0);
 		assert.deepEqual(lease.preflight?.result?.status === 'blocked' ? lease.preflight.result.violations : [], ['patch_evidence_tampered']);
 	} finally { tamperedStore.close(); }
+});
+
+test('runs one conflict-agent call, finishes the remaining stack, and promotes trusted resolution', async () => {
+	const value = await durableBlockedResolution(true);
+	const store = new IntegrationConflictAgentInvocationStore(value.databasePath);
+	const agentAttemptId = randomUUID();
+	try {
+		store.reserve({ agentAttemptId, sourceResolutionId: value.result.resolutionId }, 'operator', 'agent-resolve');
+		let calls = 0;
+		const service = new IntegrationConflictAgentOrchestrationService(store, {
+			preflight: passingConflictPreflight(store, value.workspaces),
+			worker: async (input) => {
+				calls += 1;
+				writeResolvedShared(input.workspacePath);
+				git(input.workspacePath, ['add', '--', 'shared.txt']);
+				return workerOutcome(input);
+			},
+		});
+		const lease = await service.execute(agentAttemptId, 'operator');
+		assert.equal(calls, 1, JSON.stringify(lease));
+		assert.equal(lease.status, 'resolved');
+		assert.equal(lease.modelCalls, 1, JSON.stringify(lease));
+		assert.equal(lease.resolution?.strategy, 'codex_one_call');
+		assert.equal(lease.resolution?.status, 'resolved');
+		assert.deepEqual(lease.resolution?.appliedTaskIds, ['one', 'two', 'three']);
+		assert.equal((await service.execute(agentAttemptId, 'operator')).status, 'resolved');
+		assert.equal(calls, 1);
+	} finally { store.close(); }
+
+	const parents = new MultiWorkerParentStore(value.databasePath);
+	try {
+		const promoted = await new IntegrationConflictPromotionService(parents)
+			.promote(randomUUID(), agentAttemptId, 'operator', 'promote-agent-resolution');
+		assert.equal(promoted.status, 'promoted');
+		assert.equal(promoted.result.modelCalls, 0);
+	} finally { parents.close(); }
+});
+
+test('blocks conflict-agent scope escape and unresolved index without another call', async () => {
+	for (const mode of ['scope-escape', 'unresolved-index'] as const) {
+		const value = await durableBlockedResolution();
+		const store = new IntegrationConflictAgentInvocationStore(value.databasePath);
+		const agentAttemptId = randomUUID();
+		try {
+			store.reserve({ agentAttemptId, sourceResolutionId: value.result.resolutionId }, 'operator', mode);
+			let calls = 0;
+			const service = new IntegrationConflictAgentOrchestrationService(store, {
+				preflight: passingConflictPreflight(store, value.workspaces),
+				worker: async (input) => {
+					calls += 1;
+					writeResolvedShared(input.workspacePath);
+					if (mode === 'scope-escape') {
+						git(input.workspacePath, ['add', '--', 'shared.txt']);
+						writeFileSync(join(input.workspacePath, 'outside.txt'), 'unauthorized\n');
+					}
+					return workerOutcome(input);
+				},
+			});
+			const lease = await service.execute(agentAttemptId, 'operator');
+			assert.equal(lease.status, 'blocked');
+			assert.equal(lease.modelCalls, 1);
+			assert.equal(lease.resolution?.status === 'blocked' ? lease.resolution.reason : '',
+				mode === 'scope-escape' ? 'non_conflict_changed' : 'unmerged_paths');
+			assert.equal((await service.execute(agentAttemptId, 'operator')).status, 'blocked');
+			assert.equal(calls, 1);
+		} finally { store.close(); }
+	}
+});
+
+test('blocks changed remaining-patch evidence after the sole model call', async () => {
+	const value = await durableBlockedResolution(true);
+	const store = new IntegrationConflictAgentInvocationStore(value.databasePath);
+	const agentAttemptId = randomUUID();
+	try {
+		store.reserve({ agentAttemptId, sourceResolutionId: value.result.resolutionId }, 'operator', 'remaining-patch-tamper');
+		const service = new IntegrationConflictAgentOrchestrationService(store, {
+			preflight: passingConflictPreflight(store, value.workspaces),
+			worker: async (input) => {
+				writeResolvedShared(input.workspacePath);
+				git(input.workspacePath, ['add', '--', 'shared.txt']);
+				const patchPath = join(input.workspacePath, '..', 'evidence', '03-three.patch');
+				writeFileSync(patchPath, `${readFileSync(patchPath, 'utf8')}\n`);
+				return workerOutcome(input);
+			},
+		});
+		const lease = await service.execute(agentAttemptId, 'operator');
+		assert.equal(lease.status, 'blocked');
+		assert.equal(lease.modelCalls, 1);
+		assert.equal(lease.resolution?.status === 'blocked' ? lease.resolution.reason : '', 'remaining_patch_rejected');
+	} finally { store.close(); }
+});
+
+test('blocks replay-workspace tampering before spend and never retries a failed model call', async () => {
+	const tampered = await durableBlockedResolution();
+	const tamperedStore = new IntegrationConflictAgentInvocationStore(tampered.databasePath);
+	try {
+		const agentAttemptId = randomUUID();
+		tamperedStore.reserve({ agentAttemptId, sourceResolutionId: tampered.result.resolutionId }, 'operator', 'tampered-after-preflight');
+		const preflight = passingConflictPreflight(tamperedStore, tampered.workspaces);
+		const prepared = await preflight.run(agentAttemptId, 'operator');
+		assert.equal(prepared.preflight?.result?.status, 'passed');
+		writeFileSync(join(prepared.preflight!.result!.workspacePath, 'shared.txt'), 'tampered\n');
+		let calls = 0;
+		const blocked = await new IntegrationConflictAgentOrchestrationService(tamperedStore, {
+			preflight,
+			worker: async (input) => { calls += 1; return workerOutcome(input); },
+		}).execute(agentAttemptId, 'operator');
+		assert.equal(blocked.status, 'blocked');
+		assert.equal(blocked.modelCalls, 0);
+		assert.equal(calls, 0);
+	} finally { tamperedStore.close(); }
+
+	const failed = await durableBlockedResolution();
+	const failedStore = new IntegrationConflictAgentInvocationStore(failed.databasePath);
+	try {
+		const agentAttemptId = randomUUID();
+		failedStore.reserve({ agentAttemptId, sourceResolutionId: failed.result.resolutionId }, 'operator', 'failed-worker');
+		let calls = 0;
+		const service = new IntegrationConflictAgentOrchestrationService(failedStore, {
+			preflight: passingConflictPreflight(failedStore, failed.workspaces),
+			worker: async () => { calls += 1; throw new Error('ambiguous worker failure'); },
+		});
+		const lease = await service.execute(agentAttemptId, 'operator');
+		assert.equal(lease.status, 'failed');
+		assert.equal(lease.workerRun?.evidence.status, 'failed');
+		assert.equal((await service.execute(agentAttemptId, 'operator')).status, 'failed');
+		assert.equal(calls, 1);
+	} finally { failedStore.close(); }
 });
 
 test('rejects non-conflict parents and changed patch evidence before creating a workspace', async () => {

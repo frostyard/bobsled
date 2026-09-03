@@ -3,6 +3,7 @@ import { PreparationResultSchema } from './execution-contracts.ts';
 import { WorkPlanTaskIdSchema } from './work-plan-contracts.ts';
 
 const GitObjectIdSchema = v.pipe(v.string(), v.regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/));
+const Sha256Schema = v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/));
 const PathSchema = v.pipe(v.string(), v.minLength(1), v.maxLength(500));
 export const IntegrationConflictAgentPreflightViolationSchema = v.picklist([
 	'policy_denied',
@@ -35,7 +36,8 @@ const Entries = {
 export const IntegrationConflictAgentPreflightResultSchema = v.pipe(v.variant('status', [
 	v.object({
 		...Entries, status: v.literal('passed'), preparation: PreparationResultSchema,
-		headCommit: GitObjectIdSchema, violations: v.pipe(v.array(v.never()), v.length(0)),
+		headCommit: GitObjectIdSchema, nonConflictStateSha256: Sha256Schema, conflictStateSha256: Sha256Schema,
+		violations: v.pipe(v.array(v.never()), v.length(0)),
 	}),
 	v.object({
 		...Entries,
