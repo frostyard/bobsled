@@ -472,6 +472,7 @@ function renderCard(card) {
   if (card.metrics.gatesTotal !== undefined) metricValues.push(card.metrics.gatesPassed + '/' + card.metrics.gatesTotal + ' gates');
   if (card.metrics.findings !== undefined) metricValues.push(card.metrics.blockingFindings + ' blocking · ' + card.metrics.findings + ' findings');
   if (card.metrics.checksTotal !== undefined) metricValues.push(card.metrics.checksPassed + '/' + card.metrics.checksTotal + ' checks');
+  if (card.metrics.workerTasksTotal !== undefined) metricValues.push(card.metrics.activeWorkers + ' active · ' + card.metrics.workerTasksSucceeded + '/' + card.metrics.workerTasksTotal + ' worker tasks');
   metricValues.push(formatAge(card.updatedAt));
   const metrics = document.createElement('div'); metrics.className = 'card-metrics';
   for (const value of metricValues) { const item = document.createElement('span'); item.textContent = value; metrics.append(item); }
@@ -510,6 +511,20 @@ function openDrawer(card) {
     const worker = attempt.outcome && attempt.outcome.worker && attempt.outcome.worker.result;
     const implementationSummary = document.createElement('p'); implementationSummary.textContent = (worker && worker.summary) || ('Attempt status: ' + attempt.status); implementation.append(implementationSummary);
     if (worker) { appendList(implementation, 'Worker-reported changed paths', worker.changedPaths); appendList(implementation, 'Focused checks', worker.testsRun); appendList(implementation, 'Notes', worker.notes); }
+  }
+  if (card.multiWorker) {
+    const fanout = drawerSection('Multi-worker plan');
+    const fanoutSummary = document.createElement('p'); fanoutSummary.textContent = card.multiWorker.summary; fanout.append(fanoutSummary);
+    const budget = card.multiWorker.budget;
+    appendList(fanout, 'Budget usage', [
+      'Concurrency: ' + budget.concurrentUsed + '/' + budget.concurrentMax,
+      'Attempts: ' + budget.attemptsUsed + '/' + budget.attemptsMax,
+      'Codex calls: ' + budget.openaiCodexCallsUsed + '/' + budget.openaiCodexCallsMax,
+      'Copilot calls: ' + budget.githubCopilotCallsUsed + '/' + budget.githubCopilotCallsMax,
+      ...(budget.deadlineAt ? ['Deadline: ' + new Date(budget.deadlineAt).toLocaleString()] : []),
+    ]);
+    appendList(fanout, 'Worker tasks', card.multiWorker.tasks.map((task) => task.title + ' · ' + task.state + (task.reason ? ' · ' + task.reason : '')));
+    appendList(fanout, 'Blocking evidence', card.multiWorker.reasons);
   }
   if (review) { const reviewSection = drawerSection('Independent review'); renderReviewDetails(reviewSection, run, review); }
   if (publication) {

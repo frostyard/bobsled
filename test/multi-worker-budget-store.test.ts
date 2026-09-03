@@ -13,6 +13,7 @@ import {
 } from '../src/control-plane/multi-worker-budget-store.ts';
 import { MultiWorkerParentStore } from '../src/control-plane/multi-worker-parent-store.ts';
 import { MultiWorkerScheduler } from '../src/control-plane/multi-worker-scheduler.ts';
+import { MultiWorkerOperatorStore } from '../src/control-plane/multi-worker-operator-view.ts';
 
 const ownerId = 'operator';
 
@@ -232,4 +233,35 @@ test('fails closed when policy is disabled, deadline expires, task is unknown, o
 		now = new Date('2026-09-03T00:01:00.000Z');
 		assert.throws(() => store.reserveAttempt({ attemptId: randomUUID(), planId: value.planId, taskId: 'api', provider: 'openai-codex' }, ownerId, 'expired'), /expired/);
 	} finally { store.close(); }
+});
+
+test('projects active fan-out and provider exhaustion without reserving or dispatching work', () => {
+	const value = fixture({ subscriptionCalls: { openaiCodex: 1, githubCopilot: 0 } });
+	const parents = new MultiWorkerParentStore(value.path);
+	const budgets = new MultiWorkerBudgetStore(value.path);
+	const operator = new MultiWorkerOperatorStore(value.path);
+	try {
+		const scheduled = new MultiWorkerScheduler(parents, budgets).schedule(value.planId, ownerId).scheduled;
+		assert.equal(scheduled.length, 2);
+		const first = budgets.claimDispatch(scheduled[0]!.attemptId, ownerId);
+		assert.equal(first.status, 'running');
+		const exhausted = budgets.claimDispatch(scheduled[1]!.attemptId, ownerId);
+		assert.equal(exhausted.status, 'blocked_pre_dispatch');
+
+		const active = operator.list(ownerId)[0];
+		assert.equal(active?.status, 'active');
+		assert.equal(active?.activeWorkers, 1);
+		assert.equal(active?.budget.openaiCodexCallsUsed, 1);
+		assert.equal(active?.budget.openaiCodexCallsMax, 1);
+		assert.equal(active?.tasks.find(({ taskId }) => taskId === exhausted.taskId)?.state, 'blocked');
+		assert.match(active?.reasons[0] ?? '', /Subscription-call budget is exhausted/);
+		assert.equal(budgets.listAttempts(value.planId, ownerId).length, 2, 'operator reads must not reserve attempts');
+
+		budgets.settleAfterDispatch(first.attemptId, ownerId, 'succeeded');
+		const blocked = operator.list(ownerId)[0];
+		assert.equal(blocked?.status, 'blocked');
+		assert.equal(blocked?.activeWorkers, 0);
+		assert.equal(blocked?.tasks.find(({ taskId }) => taskId === 'integration')?.state, 'blocked');
+		assert.equal(operator.list('another-user').length, 0);
+	} finally { operator.close(); budgets.close(); parents.close(); }
 });

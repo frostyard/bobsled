@@ -30,6 +30,7 @@ import { getRepository, repositories } from './control-plane/repositories.ts';
 import { triageWorkItem } from './control-plane/triage-service.ts';
 import { controlPlaneHtml } from './control-plane/ui.ts';
 import { projectOperatorBoard } from './control-plane/operator-board-view.ts';
+import { MultiWorkerOperatorStore } from './control-plane/multi-worker-operator-view.ts';
 import {
 	operatorAuthConfiguration,
 	operatorAuthStatus,
@@ -241,7 +242,12 @@ app.get('/api/runs', (context) => context.json(jobLedger.list(context.get('princ
 
 app.get('/api/operator-board', (context) => {
 	const principal = context.get('principal');
-	return context.json(projectOperatorBoard(jobLedger.list(principal), draftPublications.list(principal)));
+	const multiWorker = new MultiWorkerOperatorStore();
+	try {
+		return context.json(projectOperatorBoard(jobLedger.list(principal), draftPublications.list(principal), new Date(), multiWorker.list(principal.id)));
+	} finally {
+		multiWorker.close();
+	}
 });
 
 app.get('/api/runs/:runId', (context) => {

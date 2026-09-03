@@ -11,12 +11,13 @@ The server evaluates the latest durable state in this order so a later or more u
 1. Cancelled or failed run
 2. Existing publication record
 3. Existing review record
-4. Active implementation attempt
-5. Pending implementation authorization
-6. Pre-execution human gate
-7. Verified no-change completion
-8. Historical review-recovery case
-9. Other blocked implementation
+4. Linked multi-worker implementation plan
+5. Active implementation attempt
+6. Pending implementation authorization
+7. Pre-execution human gate
+8. Verified no-change completion
+9. Historical review-recovery case
+10. Other blocked implementation
 
 For example, an approved review with a blocked publication belongs in `Attention`, not `Delivery`, because the publication record is the later state.
 
@@ -40,6 +41,8 @@ A card is `Working` when no publication or review takes precedence and either:
 - its latest implementation attempt is `queued` or `running`.
 
 This includes repository preparation, the implementation worker, and trusted implementation quality gates. It does not include adversarial review.
+
+A linked multi-worker plan also places the card in `Working` while it is planned, waiting, active, or complete-but-awaiting integration. Later review and publication evidence still takes precedence, as do a cancelled or failed parent run.
 
 ### Review
 
@@ -66,8 +69,23 @@ A card is `Attention` when a human decision or recovery path is required. Qualif
 - pre-execution policy block with no implementation attempt (awaiting human approval);
 - a successful historical patch with no review record (review recovery);
 - any other blocked implementation attempt.
+- a linked multi-worker plan whose dependency chain, attempt allowance, provider-call allowance, or wall-clock budget is terminally exhausted.
 
 The card exposes only a valid recovery action. A permanent policy block has **Details** instead of a retry button that would repeat known-futile work.
+
+## Multi-worker evidence
+
+When a run has an immutable multi-worker plan, its card and drawer show:
+
+- active workers and completed tasks;
+- workspace attempts used versus the snapshotted maximum;
+- active concurrency versus the snapshotted maximum;
+- Codex and Copilot calls used versus their separate allowances;
+- the absolute plan deadline;
+- each task's queued, ready, preparing, running, retryable, succeeded, or blocked state; and
+- durable terminal reasons, including transitive dependency failure and budget exhaustion.
+
+This is a read-only projection. Loading or refreshing the board never invokes the scheduler, creates a workspace, reserves capacity, consumes a subscription call, or grants retry authority.
 
 ### History
 
