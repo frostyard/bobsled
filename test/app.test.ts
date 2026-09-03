@@ -81,6 +81,7 @@ test('serves the local factory interface', async () => {
 	assert.match(html, /Revise brief once/);
 	assert.match(html, /Finalize brief/);
 	assert.match(html, /Run independent triage/);
+	assert.match(html, /Admit triaged run/);
 	assert.match(html, /How lane assignment works/);
 	assert.match(html, /Admitted run is pending authorization/);
 	assert.match(html, /data-lane="attention"/);
@@ -116,6 +117,8 @@ test('serves principal-owned conversational intake without implicit model author
 	const missingKey=await app.request(`/api/intake-conversations/${created.id}/revisions`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:1,message:'Clarify the audience.'})});assert.equal(missingKey.status,409);
 	const finalized=await app.request(`/api/intake-conversations/${created.id}/finalize`,{method:'POST',headers:{'content-type':'application/json','idempotency-key':`${key}:final`},body:JSON.stringify({expectedVersion:1,reason:'Operator confirmed this application-route brief for triage.'})});assert.equal(finalized.status,201);const payload=await finalized.json() as {snapshot:{briefSha256:string;triageAuthorized:boolean;runAdmissionAuthorized:boolean};conversation:{status:string;version:number}};assert.equal(payload.conversation.status,'finalized');assert.equal(payload.conversation.version,2);assert.equal(payload.snapshot.briefSha256.length,64);assert.equal(payload.snapshot.triageAuthorized,false);assert.equal(payload.snapshot.runAdmissionAuthorized,false);assert.equal((await app.request(`/api/intake-conversations/${created.id}/snapshot`)).status,200);
 	assert.equal(await (await app.request(`/api/intake-conversations/${created.id}/snapshot/triage`)).json(),null);
+	assert.equal(await (await app.request(`/api/intake-conversations/${created.id}/snapshot/admission`)).json(),null);
+	const prematureAdmission=await app.request(`/api/intake-conversations/${created.id}/snapshot/admission`,{method:'POST',headers:{'content-type':'application/json','idempotency-key':`${key}:premature-admission`},body:'{}'});assert.equal(prematureAdmission.status,409);
 	const cancelKey=`${key}:cancel`,cancelledConversation=await (await app.request('/api/intake-conversations',{method:'POST',headers:{'content-type':'application/json','idempotency-key':cancelKey},body:JSON.stringify({repositoryId:brief.repositoryId,seed:{...seed,key:cancelKey},brief})})).json() as {id:string;version:number};
 	const cancelled=await app.request(`/api/intake-conversations/${cancelledConversation.id}/cancel`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:cancelledConversation.version,reason:'Operator stopped this application-route test.'})});assert.equal(cancelled.status,200);assert.equal((await cancelled.json() as {status:string}).status,'cancelled');
 });

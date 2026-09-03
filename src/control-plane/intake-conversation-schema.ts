@@ -56,9 +56,22 @@ export function ensureIntakeConversationSchema(db:Database.Database):void {
 			ON intake_snapshot_triages(owner_id, created_at DESC);
 		CREATE UNIQUE INDEX IF NOT EXISTS intake_snapshot_triages_one_model_call_idx
 			ON intake_snapshot_triages(snapshot_id) WHERE model_calls=1;
+		CREATE TABLE IF NOT EXISTS intake_snapshot_run_admissions (
+			id TEXT PRIMARY KEY, snapshot_id TEXT NOT NULL, triage_id TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL, request_sha256 TEXT NOT NULL, repository_sha256 TEXT NOT NULL,
+			work_item_sha256 TEXT NOT NULL, work_item_json TEXT NOT NULL, triage_result_sha256 TEXT NOT NULL,
+			status TEXT NOT NULL, run_id TEXT, reason TEXT NOT NULL, created_at TEXT NOT NULL, finished_at TEXT,
+			UNIQUE(owner_id, idempotency_key),
+			FOREIGN KEY(snapshot_id) REFERENCES intake_brief_snapshots(id),
+			FOREIGN KEY(triage_id) REFERENCES intake_snapshot_triages(id),
+			FOREIGN KEY(run_id) REFERENCES runs(id)
+		);
+		CREATE INDEX IF NOT EXISTS intake_snapshot_run_admissions_owner_created_idx
+			ON intake_snapshot_run_admissions(owner_id, created_at DESC);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (41, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (42, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (43, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (44, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (45, datetime('now'));
 	`);
 }
