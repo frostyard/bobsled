@@ -44,7 +44,7 @@ const enrolled = [
 			writeGitHub: false,
 			merge: false,
 		},
-		multiRepo: { coordinateWith: [] },
+		multiRepo: { coordinateWith: [], compatibilityGates: [] },
 		executionPolicy: {
 			enabled: true,
 			maxFiles: 8,
@@ -106,7 +106,7 @@ const enrolled = [
 			writeGitHub: true,
 			merge: false,
 		},
-		multiRepo: { coordinateWith: [] },
+		multiRepo: { coordinateWith: [], compatibilityGates: [] },
 		executionPolicy: {
 			enabled: false,
 			maxFiles: 8,
@@ -173,7 +173,7 @@ const enrolled = [
 			writeGitHub: true,
 			merge: false,
 		},
-		multiRepo: { coordinateWith: [] },
+		multiRepo: { coordinateWith: [], compatibilityGates: [] },
 		executionPolicy: {
 			enabled: true,
 			maxFiles: 10,
