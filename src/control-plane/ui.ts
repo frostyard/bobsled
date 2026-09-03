@@ -137,17 +137,17 @@ export function controlPlaneHtml(identity: ControlPlaneIdentity): string {
     <section class="panel">
       <h2>Work intake</h2>
       <label>Repository<select id="repo"></select></label>
-      <div class="toolbar"><button class="secondary" id="issues">Load open issues</button><button class="secondary" id="fixtures">Load dry-run fixtures</button></div>
+      <div class="toolbar"><button class="secondary" id="issues">Load open issues</button></div>
       <div id="items" class="items"></div>
       <form id="manual">
         <label>Manual task title<input id="title" maxlength="500" required placeholder="Describe one bounded change"></label>
         <label>Details<textarea id="body" maxlength="50000" placeholder="Context, desired behavior, constraints, acceptance criteria"></textarea></label>
-        <div class="toolbar"><button id="submit">Dry-run triage</button><button type="button" class="secondary" id="start-conversation">Refine in chat</button></div>
+        <div class="toolbar"><button id="submit">Check it over</button><button type="button" class="secondary" id="start-conversation">Refine in chat</button></div>
       </form>
     </section>
     <section class="panel" id="decision-panel">
       <h2>Current triage decision</h2>
-      <div id="result" class="result"><span class="eyebrow">Select a fixture, issue, or enter a task.</span></div>
+      <div id="result" class="result"><span class="eyebrow">Pick an issue or write a task to get started.</span></div>
     </section>
   </div>
   <section class="panel ledger" id="conversation-panel">
@@ -472,7 +472,7 @@ function stageRevisedTask(run, review) {
   document.querySelector('#body').value = job.workItemSnapshot.body + (guidance ? '\n\nAdversarial review findings to address:\n' + guidance : '');
   result.textContent = '';
   const notice = document.createElement('div'); notice.className = 'notice'; notice.textContent = 'REVISED TASK STAGED · NOT YET TRIAGED';
-  const instruction = document.createElement('p'); instruction.textContent = 'Edit the populated task, then click Dry-run triage. The resulting decision will replace this message and scroll into view.';
+  const instruction = document.createElement('p'); instruction.textContent = 'Edit the task below, then check it over. What comes back will replace this message.';
   result.append(notice, instruction);
   document.querySelector('#manual').scrollIntoView({behavior:'smooth', block:'start'});
   document.querySelector('#body').focus();
@@ -716,9 +716,6 @@ async function triage(workItem) {
 document.querySelector('#issues').addEventListener('click', async () => {
   try { renderItems(await json('/api/repositories/' + repo.value + '/issues')); } catch (error) { showError(error); }
 });
-document.querySelector('#fixtures').addEventListener('click', async () => {
-  try { renderItems(await json('/api/repositories/' + repo.value + '/fixtures')); } catch (error) { showError(error); }
-});
 document.querySelector('#manual').addEventListener('submit', (event) => {
   event.preventDefault();
   triage({source:'manual', key:'manual:' + browserUuid(), title:document.querySelector('#title').value, body:document.querySelector('#body').value, labels:[]});
@@ -743,7 +740,6 @@ try {
     const option = document.createElement('option'); option.value = value.id; option.textContent = value.displayName + ' · ' + value.id; repo.append(option);
     const filterOption = document.createElement('option'); filterOption.value = value.id; filterOption.textContent = value.displayName + ' · ' + value.id; boardRepo.append(filterOption);
   }
-  document.querySelector('#fixtures').click();
   await Promise.all([loadRuns(), loadAuthority(), loadLatestConversation()]);
 } catch (error) { showError(error); }
 </script>

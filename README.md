@@ -64,7 +64,7 @@ npm run agent:bobsled -- --id demo --message "Now implement your top suggestion.
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173/> to select clix, load its real open issues or local dry-run fixtures, enter a manual task, and receive a validated triage decision.
+Open <http://127.0.0.1:5173/> to pick a repository, load its open issues or write a task, and get a validated triage decision.
 
 Routes:
 
@@ -73,7 +73,6 @@ Routes:
 - `POST /agents/copilot/:conversationId`
 - `GET /api/repositories`
 - `GET /api/repositories/:owner/:repository/issues`
-- `GET /api/repositories/:owner/:repository/fixtures`
 - `POST /api/triage`
 - `GET /api/runs`
 - `GET /api/runs/:runId`

@@ -51,18 +51,6 @@ test('lists only enrolled repositories and exposes their bounded policies', asyn
 	assert.equal(website?.capabilities.writeGitHub, true);
 });
 
-test('serves clix dry-run fixtures and rejects unenrolled repositories', async () => {
-	const fixtures = await app.request('/api/repositories/frostyard/clix/fixtures');
-	assert.equal(fixtures.status, 200);
-	assert.equal((await fixtures.json() as unknown[]).length, 2);
-
-	const missing = await app.request('/api/repositories/frostyard/not-enrolled/fixtures');
-	assert.equal(missing.status, 404);
-	const bobsled = await app.request('/api/repositories/frostyard/bobsled/fixtures');
-	assert.equal(bobsled.status, 200);
-	assert.deepEqual(await bobsled.json(), []);
-});
-
 test('serves the local factory interface', async () => {
 	const response = await app.request('/');
 	assert.equal(response.status, 200);

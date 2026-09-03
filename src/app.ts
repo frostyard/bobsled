@@ -5,7 +5,6 @@ import { Bobsled } from './agents/bobsled.ts';
 import { CodexAgent } from './agents/codex.ts';
 import { CopilotAgent } from './agents/copilot.ts';
 import { createBobsledGitHubChannel } from './channels/github.ts';
-import { clixFixtures } from './control-plane/fixtures.ts';
 import { githubReader } from './control-plane/github-reader.ts';
 import { githubAppStatus } from './control-plane/github-app.ts';
 import {
@@ -272,12 +271,6 @@ app.get('/api/repositories/:owner/:repository/issues', async (context) => {
 	} catch (error) {
 		return context.json({ error: error instanceof Error ? error.message : 'GitHub intake failed' }, 502);
 	}
-});
-
-app.get('/api/repositories/:owner/:repository/fixtures', (context) => {
-	const id = `${context.req.param('owner')}/${context.req.param('repository')}`;
-	if (!getRepository(id)) return context.json({ error: 'Repository is not enrolled' }, 404);
-	return context.json(id === 'frostyard/clix' ? clixFixtures : []);
 });
 
 app.post('/api/triage', async (context) => {
