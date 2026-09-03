@@ -32,6 +32,8 @@ import { IntakeConversationConflictError, IntakeConversationForbiddenError, Inta
 import { IntakeConversationRevisionConflictError, IntakeConversationRevisionForbiddenError, IntakeConversationRevisionNotFoundError, IntakeConversationRevisionStore } from './control-plane/intake-conversation-revision-store.ts';
 import { IntakeConversationRevisionService } from './control-plane/intake-conversation-revision-service.ts';
 import { IntakeBriefSnapshotConflictError, IntakeBriefSnapshotForbiddenError, IntakeBriefSnapshotNotFoundError, IntakeBriefSnapshotStore } from './control-plane/intake-brief-snapshot-store.ts';
+import { IntakeSnapshotTriageConflictError, IntakeSnapshotTriageForbiddenError, IntakeSnapshotTriageNotFoundError, IntakeSnapshotTriageStore } from './control-plane/intake-snapshot-triage-store.ts';
+import { IntakeSnapshotTriageService } from './control-plane/intake-snapshot-triage-service.ts';
 import { controlPlaneHtml } from './control-plane/ui.ts';
 import { projectOperatorBoard } from './control-plane/operator-board-view.ts';
 import { MultiWorkerOperatorStore } from './control-plane/multi-worker-operator-view.ts';
@@ -84,6 +86,8 @@ const intakeConversations = new IntakeConversationStore();
 const intakeRevisions = new IntakeConversationRevisionStore(undefined, undefined, intakeConversations);
 const intakeRevisionService = new IntakeConversationRevisionService(intakeRevisions);
 const intakeSnapshots = new IntakeBriefSnapshotStore(undefined, undefined, intakeConversations);
+const intakeSnapshotTriages = new IntakeSnapshotTriageStore(undefined, undefined, intakeSnapshots);
+const intakeSnapshotTriageService = new IntakeSnapshotTriageService(intakeSnapshotTriages);
 
 app.use('*', async (context, next) => {
 	const publicPath = context.req.path === '/health' ||
@@ -135,9 +139,9 @@ function githubActionError(context: Parameters<Parameters<typeof app.onError>[0]
 
 function intakeConversationError(context: Parameters<Parameters<typeof app.onError>[0]>[1], error: unknown) {
 	const message = error instanceof Error ? error.message : 'Conversational intake failed';
-	if (error instanceof IntakeConversationNotFoundError || error instanceof IntakeConversationRevisionNotFoundError || error instanceof IntakeBriefSnapshotNotFoundError) return context.json({ error: message }, 404);
-	if (error instanceof IntakeConversationForbiddenError || error instanceof IntakeConversationRevisionForbiddenError || error instanceof IntakeBriefSnapshotForbiddenError) return context.json({ error: message }, 403);
-	if (error instanceof IntakeConversationConflictError || error instanceof IntakeConversationRevisionConflictError || error instanceof IntakeBriefSnapshotConflictError) return context.json({ error: message }, 409);
+	if (error instanceof IntakeConversationNotFoundError || error instanceof IntakeConversationRevisionNotFoundError || error instanceof IntakeBriefSnapshotNotFoundError || error instanceof IntakeSnapshotTriageNotFoundError) return context.json({ error: message }, 404);
+	if (error instanceof IntakeConversationForbiddenError || error instanceof IntakeConversationRevisionForbiddenError || error instanceof IntakeBriefSnapshotForbiddenError || error instanceof IntakeSnapshotTriageForbiddenError) return context.json({ error: message }, 403);
+	if (error instanceof IntakeConversationConflictError || error instanceof IntakeConversationRevisionConflictError || error instanceof IntakeBriefSnapshotConflictError || error instanceof IntakeSnapshotTriageConflictError) return context.json({ error: message }, 409);
 	return context.json({ error: message }, 400);
 }
 
@@ -326,6 +330,16 @@ app.post('/api/intake-conversations/:conversationId/finalize', async (context) =
 	} catch (error) { return intakeConversationError(context, error); }
 });
 
+app.get('/api/intake-conversations/:conversationId/snapshot/triage', (context) => {
+	try { const snapshot=intakeSnapshots.getForConversation(context.req.param('conversationId'),context.get('principal'));return context.json(intakeSnapshotTriages.getForSnapshot(snapshot.id,context.get('principal'))??null); }
+	catch (error) { return intakeConversationError(context,error); }
+});
+
+app.post('/api/intake-conversations/:conversationId/snapshot/triage', async (context) => {
+	try { const snapshot=intakeSnapshots.getForConversation(context.req.param('conversationId'),context.get('principal')),triage=intakeSnapshotTriages.reserve({snapshotId:snapshot.id,reason:'Operator explicitly requested independent triage of this immutable final brief.'},context.get('principal'),context.req.header('idempotency-key')??'');return context.json(await intakeSnapshotTriageService.run(triage.id,context.get('principal')),201); }
+	catch (error) { return intakeConversationError(context,error); }
+});
+
 app.get('/api/runs', (context) => context.json(jobLedger.list(context.get('principal'))));
 
 app.get('/api/operator-board', (context) => {
@@ -469,7 +483,7 @@ app.post('/api/publication-recoveries/resolutions', async (context) => {
 app.get('/health', (context) =>
 	context.json({
 		ok: true,
-		agents: ['bobsled', 'codex', 'copilot', 'triage', 'intake-brief-revision', 'implementation-worker', 'integration-worker', 'integration-conflict-worker', 'adversarial-reviewer', 'remediation-worker'],
+		agents: ['bobsled', 'codex', 'copilot', 'triage', 'intake-brief-revision', 'intake-snapshot-triage', 'implementation-worker', 'integration-worker', 'integration-conflict-worker', 'adversarial-reviewer', 'remediation-worker'],
 		repositories: repositories.map(({ id, readOnly }) => ({ id, readOnly })),
 		githubApp: githubAppStatus(),
 		operatorAuth: operatorAuthStatus(),
