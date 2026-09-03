@@ -19,6 +19,12 @@ import {
 } from '../src/control-plane/multi-repository-compatibility-execution-store.ts';
 import { MultiRepositoryVerificationAuthorizationStore } from '../src/control-plane/multi-repository-verification-authorization-store.ts';
 import { MultiRepositoryVerificationPlanStore } from '../src/control-plane/multi-repository-verification-plan-store.ts';
+import {
+	MultiRepositoryPublicationAuthorizationConflictError,
+	MultiRepositoryPublicationAuthorizationForbiddenError,
+	MultiRepositoryPublicationAuthorizationPolicyError,
+	MultiRepositoryPublicationAuthorizationStore,
+} from '../src/control-plane/multi-repository-publication-authorization-store.ts';
 import { repositories } from '../src/control-plane/repositories.ts';
 
 const principal = { id: 'operator:compatibility-execution-test' };
@@ -28,6 +34,9 @@ function coordinatedRepositories(): RepositoryContract[] {
 	const ids = ['frostyard/clix', 'frostyard/frostyard-org'];
 	return repositories.filter(({ id }) => ids.includes(id)).map((repository) => ({
 		...repository,
+		readOnly: false,
+		capabilities: { ...repository.capabilities, writeCode: true, writeGitHub: true },
+		publicationPolicy: { ...repository.publicationPolicy, enabled: true },
 		multiRepo: {
 			coordinateWith: ids.filter((id) => id !== repository.id),
 			compatibilityGates: repository.id === 'frostyard/frostyard-org' ? [{
@@ -81,12 +90,13 @@ function prepare(value: ReturnType<typeof fixture>) {
 		db.transaction(() => {
 			for (const [index, item] of workspaces.entries()) {
 				const attemptId = `00000000-0000-4000-8000-0000000000${index + 61}`;
+				const reviewId = `10000000-0000-4000-8000-0000000000${index + 61}`;
 				const evidence = { baseCommit: item.baseCommit, headCommit: item.baseCommit, headMoved: false, changedPaths: ['README.md'], filesChanged: 1, diffLines: 1, diffSha256: item.patchSha256, protectedPaths: [], policyViolations: [], gates: [], workspacePath: item.workspacePath, evidencePath: join(value.workspaceRoot, `evidence-${index}`) };
 				db.prepare("UPDATE runs SET status='succeeded', updated_at=? WHERE id=?").run(now().toISOString(), item.member.runId);
 				db.prepare("UPDATE jobs SET status='succeeded', current_attempt=1, updated_at=? WHERE id=?").run(now().toISOString(), item.member.jobId);
 				db.prepare("INSERT INTO attempts (id, job_id, number, status, finished_at, outcome_json) VALUES (?, ?, 1, 'succeeded', ?, ?)").run(attemptId, item.member.jobId, now().toISOString(), JSON.stringify({ evidence }));
-				db.prepare("INSERT INTO reviews (id, job_id, attempt_id, number, status, finished_at) VALUES (?, ?, ?, 1, 'approved', ?)").run(`10000000-0000-4000-8000-0000000000${index + 61}`, item.member.jobId, attemptId, now().toISOString());
-				db.prepare("INSERT INTO artifacts (id, job_id, attempt_id, kind, uri, digest, metadata_json, created_at) VALUES (?, ?, ?, 'review_draft_patch', ?, ?, '{}', ?)").run(`20000000-0000-4000-8000-0000000000${index + 61}`, item.member.jobId, attemptId, `workspace://${item.artifact.slice(value.workspaceRoot.length + 1)}`, item.patchSha256, now().toISOString());
+				db.prepare("INSERT INTO reviews (id, job_id, attempt_id, number, status, outcome_json, finished_at) VALUES (?, ?, ?, 1, 'approved', ?, ?)").run(reviewId, item.member.jobId, attemptId, JSON.stringify({ evidence }), now().toISOString());
+				db.prepare("INSERT INTO artifacts (id, job_id, attempt_id, kind, uri, digest, metadata_json, created_at) VALUES (?, ?, ?, 'review_draft_patch', ?, ?, ?, ?)").run(`20000000-0000-4000-8000-0000000000${index + 61}`, item.member.jobId, attemptId, `workspace://${item.artifact.slice(value.workspaceRoot.length + 1)}`, item.patchSha256, JSON.stringify({ reviewId }), now().toISOString());
 			}
 		})();
 	} finally { db.close(); }
@@ -160,6 +170,72 @@ test('serializes claims and command starts across database connections', () => {
 		assert.throws(() => second.get(prepared.execution.id, { id: 'operator:other' }), MultiRepositoryCompatibilityExecutionForbiddenError);
 		assert.throws(() => second.reserve({ authorizationId: prepared.execution.authorizationId, reason: 'Changed replay input cannot reuse the key.' }, principal, 'execution'), MultiRepositoryCompatibilityExecutionConflictError);
 	} finally { second.close(); first.close(); rmSync(value.root, { recursive: true, force: true }); }
+});
+
+test('authorizes one immutable all-member publication barrier after compatibility success', async () => {
+	const value = fixture(); const prepared = prepare(value);
+	const executionStore = new MultiRepositoryCompatibilityExecutionStore(value.path, now, prepared.policy);
+	const executionService = new MultiRepositoryCompatibilityExecutionService({
+		path: value.path, store: executionStore, workspaceRoot: value.workspaceRoot,
+		runner: async () => ({ status: 'passed', exitCode: 0, durationMs: 1, stdout: '', stderr: '', truncated: false }),
+	});
+	try {
+		const execution = await executionService.run(prepared.execution.id, principal.id);
+		assert.equal(execution.status, 'succeeded');
+		const first = new MultiRepositoryPublicationAuthorizationStore(value.path, now, prepared.policy);
+		const second = new MultiRepositoryPublicationAuthorizationStore(value.path, now, prepared.policy);
+		try {
+			const authorization = first.authorize({ compatibilityExecutionId: execution.id, reason: 'Bind every approved patch before any linked draft publication.' }, principal, 'publication-barrier');
+			assert.equal(authorization.status, 'ready_for_linked_publication');
+			assert.equal(authorization.publicationBarrierSatisfied, true);
+			assert.equal(authorization.draftPublicationExecutionAuthorized, false);
+			assert.equal(authorization.githubMutationAuthorized, false);
+			assert.equal(authorization.rolloutAuthorized, false);
+			assert.equal(authorization.mergeAuthorized, false);
+			assert.deepEqual(authorization.rolloutLayers, [['frostyard/clix'], ['frostyard/frostyard-org']]);
+			assert.deepEqual(authorization.rollbackLayers, [['frostyard/frostyard-org'], ['frostyard/clix']]);
+			assert.equal(authorization.members.length, 2);
+			assert.equal(authorization.members.every((member) => member.filesChanged === 1 && member.policySnapshot.publicationPolicy.enabled), true);
+			assert.equal(second.authorize({ compatibilityExecutionId: execution.id, reason: 'Bind every approved patch before any linked draft publication.' }, principal, 'publication-barrier').id, authorization.id);
+			assert.throws(() => second.authorize({ compatibilityExecutionId: execution.id, reason: 'Competing linked publication authorization is not allowed.' }, principal, 'publication-barrier-2'), MultiRepositoryPublicationAuthorizationConflictError);
+			assert.throws(() => second.get(authorization.id, { id: 'operator:other' }), MultiRepositoryPublicationAuthorizationForbiddenError);
+			const db = new Database(value.path);
+			try {
+				assert.equal((db.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version=37').get() as { count: number }).count, 1);
+				const stored = db.prepare('SELECT members_json FROM multi_repository_publication_authorizations WHERE id=?').get(authorization.id) as { members_json: string };
+				const members = JSON.parse(stored.members_json) as Array<Record<string, unknown>>;
+				members[0]!.patchSha256 = 'f'.repeat(64);
+				db.prepare('UPDATE multi_repository_publication_authorizations SET members_json=? WHERE id=?').run(JSON.stringify(members), authorization.id);
+			} finally { db.close(); }
+			assert.throws(() => first.get(authorization.id, principal), MultiRepositoryPublicationAuthorizationConflictError);
+		} finally { second.close(); first.close(); }
+	} finally { executionService.close(); rmSync(value.root, { recursive: true, force: true }); }
+});
+
+test('blocks linked publication before side effects when compatibility or current policy is insufficient', async () => {
+	const value = fixture(); const prepared = prepare(value);
+	const beforeExecution = new MultiRepositoryPublicationAuthorizationStore(value.path, now, prepared.policy);
+	try {
+		assert.throws(() => beforeExecution.authorize({ compatibilityExecutionId: prepared.execution.id, reason: 'Compatibility has not reached a publishable terminal state.' }, principal, 'too-early'), MultiRepositoryPublicationAuthorizationConflictError);
+	} finally { beforeExecution.close(); }
+	const executionStore = new MultiRepositoryCompatibilityExecutionStore(value.path, now, prepared.policy);
+	const executionService = new MultiRepositoryCompatibilityExecutionService({
+		path: value.path, store: executionStore, workspaceRoot: value.workspaceRoot,
+		runner: async () => ({ status: 'passed', exitCode: 0, durationMs: 1, stdout: '', stderr: '', truncated: false }),
+	});
+	try {
+		const execution = await executionService.run(prepared.execution.id, principal.id);
+		const revoked = prepared.policy.map((repository) => repository.id === 'frostyard/clix'
+			? { ...repository, publicationPolicy: { ...repository.publicationPolicy, enabled: false } }
+			: repository);
+		const publications = new MultiRepositoryPublicationAuthorizationStore(value.path, now, revoked);
+		try {
+			assert.throws(() => publications.authorize({ compatibilityExecutionId: execution.id, reason: 'Current policy must authorize every linked draft.' }, principal, 'policy-blocked'), MultiRepositoryPublicationAuthorizationPolicyError);
+			const db = new Database(value.path, { readonly: true });
+			try { assert.equal((db.prepare('SELECT COUNT(*) AS count FROM multi_repository_publication_authorizations').get() as { count: number }).count, 0); }
+			finally { db.close(); }
+		} finally { publications.close(); }
+	} finally { executionService.close(); rmSync(value.root, { recursive: true, force: true }); }
 });
 
 test('Linux runner removes networking and bind-mounts every peer workspace read-only', {

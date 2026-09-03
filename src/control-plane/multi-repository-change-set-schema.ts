@@ -117,6 +117,21 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 			created_at TEXT NOT NULL,
 			FOREIGN KEY(execution_id) REFERENCES multi_repository_compatibility_executions(id)
 		);
+		CREATE TABLE IF NOT EXISTS multi_repository_publication_authorizations (
+			id TEXT PRIMARY KEY, compatibility_execution_id TEXT NOT NULL UNIQUE,
+			verification_plan_id TEXT NOT NULL, schedule_id TEXT NOT NULL, change_set_id TEXT NOT NULL,
+			owner_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_sha256 TEXT NOT NULL,
+			compatibility_result_sha256 TEXT NOT NULL, member_set_sha256 TEXT NOT NULL,
+			members_json TEXT NOT NULL, rollout_layers_json TEXT NOT NULL, rollback_layers_json TEXT NOT NULL,
+			reason TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
+			UNIQUE(owner_id, idempotency_key),
+			FOREIGN KEY(compatibility_execution_id) REFERENCES multi_repository_compatibility_executions(id),
+			FOREIGN KEY(verification_plan_id) REFERENCES multi_repository_verification_plans(id),
+			FOREIGN KEY(schedule_id) REFERENCES multi_repository_change_set_schedules(id),
+			FOREIGN KEY(change_set_id) REFERENCES multi_repository_change_sets(id)
+		);
+		CREATE INDEX IF NOT EXISTS multi_repository_publication_authorizations_owner_created_idx
+			ON multi_repository_publication_authorizations(owner_id, created_at DESC);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (26, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (27, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (28, datetime('now'));
@@ -128,6 +143,7 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (34, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (35, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (36, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (37, datetime('now'));
 	`);
 	const leaseColumns = new Set((db.prepare('PRAGMA table_info(multi_repository_member_preparation_leases)').all() as Array<{ name: string }>).map(({ name }) => name));
 	if (!leaseColumns.has('started_at')) db.exec('ALTER TABLE multi_repository_member_preparation_leases ADD COLUMN started_at TEXT');
