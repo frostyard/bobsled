@@ -67,12 +67,17 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 			idempotency_key TEXT NOT NULL, request_sha256 TEXT NOT NULL, preparation_result_sha256 TEXT NOT NULL,
 			policy_snapshot_sha256 TEXT NOT NULL, policy_snapshot_json TEXT NOT NULL,
 			base_commit TEXT NOT NULL, workspace_path TEXT NOT NULL, evidence_path TEXT NOT NULL,
-			reason TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
+			reason TEXT NOT NULL, status TEXT NOT NULL, worker_calls INTEGER NOT NULL DEFAULT 0,
+			attempt_id TEXT, attempt_number INTEGER, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
 			UNIQUE(owner_id, idempotency_key),
 			FOREIGN KEY(lease_id) REFERENCES multi_repository_member_preparation_leases(id),
 			FOREIGN KEY(schedule_id) REFERENCES multi_repository_change_set_schedules(id),
 			FOREIGN KEY(change_set_id) REFERENCES multi_repository_change_sets(id),
 			FOREIGN KEY(run_id) REFERENCES runs(id), FOREIGN KEY(job_id) REFERENCES jobs(id)
+		);
+		CREATE TABLE IF NOT EXISTS multi_repository_member_execution_preflights (
+			reservation_id TEXT PRIMARY KEY, result_sha256 TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+			FOREIGN KEY(reservation_id) REFERENCES multi_repository_member_execution_reservations(id)
 		);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (26, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (27, datetime('now'));
@@ -80,10 +85,17 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (29, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (30, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (31, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (32, datetime('now'));
 	`);
 	const leaseColumns = new Set((db.prepare('PRAGMA table_info(multi_repository_member_preparation_leases)').all() as Array<{ name: string }>).map(({ name }) => name));
 	if (!leaseColumns.has('started_at')) db.exec('ALTER TABLE multi_repository_member_preparation_leases ADD COLUMN started_at TEXT');
 	if (!leaseColumns.has('finished_at')) db.exec('ALTER TABLE multi_repository_member_preparation_leases ADD COLUMN finished_at TEXT');
+	const executionColumns = new Set((db.prepare('PRAGMA table_info(multi_repository_member_execution_reservations)').all() as Array<{ name: string }>).map(({ name }) => name));
+	if (!executionColumns.has('worker_calls')) db.exec('ALTER TABLE multi_repository_member_execution_reservations ADD COLUMN worker_calls INTEGER NOT NULL DEFAULT 0');
+	if (!executionColumns.has('attempt_id')) db.exec('ALTER TABLE multi_repository_member_execution_reservations ADD COLUMN attempt_id TEXT');
+	if (!executionColumns.has('attempt_number')) db.exec('ALTER TABLE multi_repository_member_execution_reservations ADD COLUMN attempt_number INTEGER');
+	if (!executionColumns.has('started_at')) db.exec('ALTER TABLE multi_repository_member_execution_reservations ADD COLUMN started_at TEXT');
+	if (!executionColumns.has('finished_at')) db.exec('ALTER TABLE multi_repository_member_execution_reservations ADD COLUMN finished_at TEXT');
 	db.exec(`
 		DROP INDEX IF EXISTS one_reserved_multi_repository_member_per_schedule;
 		CREATE UNIQUE INDEX IF NOT EXISTS one_active_multi_repository_member_per_schedule
