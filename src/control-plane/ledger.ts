@@ -28,6 +28,7 @@ import { projectReviewForOperator } from './operator-review-view.ts';
 import { ensureIntegrationInvocationSchema } from './integration-invocation-store.ts';
 import { ensureIntegrationConflictAgentInvocationSchema } from './integration-conflict-agent-invocation-store.ts';
 import { ensureMultiWorkerBudgetSchema } from './multi-worker-budget-store.ts';
+import { ensurePublicationRebaseSchema } from './publication-rebase-schema.ts';
 import { dataPath } from '../paths.ts';
 
 export interface Principal {
@@ -166,6 +167,7 @@ export class JobLedger {
 		ensureIntegrationInvocationSchema(this.#db);
 		ensureIntegrationConflictAgentInvocationSchema(this.#db);
 		ensureMultiWorkerBudgetSchema(this.#db);
+		ensurePublicationRebaseSchema(this.#db);
 	}
 
 	admit(input: unknown, principal: Principal, idempotencyKey: string): RunRecord {
