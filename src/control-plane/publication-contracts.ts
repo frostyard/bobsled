@@ -20,6 +20,8 @@ export const DraftPublicationRecordSchema = v.pipe(v.object({
 	jobId: v.pipe(v.string(), v.uuid()),
 	attemptId: v.pipe(v.string(), v.uuid()),
 	reviewId: v.pipe(v.string(), v.uuid()),
+	sourceRebaseReviewId: v.optional(v.pipe(v.string(), v.uuid())),
+	supersedesPublicationId: v.optional(v.pipe(v.string(), v.uuid())),
 	repositoryId: v.pipe(v.string(), v.minLength(1)),
 	status: v.picklist(['blocked', 'pending', 'running', 'published', 'checks_pending', 'checks_failed', 'ready_for_human', 'merged', 'closed', 'failed']),
 	baseCommit: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/)),

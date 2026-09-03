@@ -16,6 +16,8 @@ import {
 	type ScopedInstallationAuthority,
 } from './github-installation.ts';
 import { jobLedger, type JobLedger, type Principal } from './ledger.ts';
+import { RecoveredDraftPublicationRequestSchema, type RecoveredDraftPublicationRequest } from './publication-rebase-review-contracts.ts';
+import { ensurePublicationRebaseReviewSchema } from './publication-rebase-review-schema.ts';
 import {
 	DraftPublicationRecordSchema,
 	DraftPublicationRequestSchema,
@@ -47,6 +49,7 @@ interface PublicationCandidate {
 	workspacePath: string;
 	baseCommit: string;
 	approvedPatchSha256: string;
+	supersedesPublicationId?: string;
 }
 
 interface PublicationBlobEntry {
@@ -66,6 +69,7 @@ interface PublicationRow {
 	id: string; owner_id: string; idempotency_key: string; request_sha256: string;
 	run_id: string; run_version: number; job_id: string; attempt_id: string; review_id: string;
 	repository_id: string; status: DraftPublicationRecord['status']; base_commit: string;
+	source_rebase_review_id: string | null; supersedes_publication_id: string | null;
 	approved_patch_sha256: string; branch_name: string; title: string; body: string; marker: string;
 	required_checks_json: string; reason: string; blocked_reason: string | null; attempt_count: number; lease_expires_at: string | null;
 	commit_sha: string | null; pull_number: number | null; pull_url: string | null;
@@ -123,6 +127,8 @@ function rowToRecord(row: PublicationRow): DraftPublicationRecord {
 	return v.parse(DraftPublicationRecordSchema, {
 		id: row.id, ownerId: row.owner_id, runId: row.run_id, jobId: row.job_id,
 		attemptId: row.attempt_id, reviewId: row.review_id, repositoryId: row.repository_id,
+		sourceRebaseReviewId: row.source_rebase_review_id ?? undefined,
+		supersedesPublicationId: row.supersedes_publication_id ?? undefined,
 		status: row.status, baseCommit: row.base_commit, approvedPatchSha256: row.approved_patch_sha256,
 		branchName: row.branch_name, title: row.title, body: row.body, marker: row.marker,
 		requiredCheckNames: JSON.parse(row.required_checks_json),
@@ -160,6 +166,7 @@ function publicationBody(candidate: PublicationCandidate, marker: string): strin
 		`- Review: \`${candidate.reviewId}\``,
 		`- Base commit: \`${candidate.baseCommit}\``,
 		`- Approved patch SHA-256: \`${candidate.approvedPatchSha256}\``,
+		...(candidate.supersedesPublicationId ? [`- Supersedes blocked publication: \`${candidate.supersedesPublicationId}\``] : []),
 		'', '## Human boundary',
 		'This pull request is intentionally a draft. Bobsled cannot merge it; human review and repository checks remain mandatory.',
 		'', marker,
@@ -275,6 +282,7 @@ export class DraftPublicationService {
 	readonly #now: () => Date;
 	readonly #authority: GitHubInstallationAuthority;
 	readonly #repository: (id: string) => RepositoryContract | undefined;
+	readonly #ledger: JobLedger;
 	readonly #resolveCandidate: CandidateResolver;
 	readonly #inspectWorkspace: WorkspaceInspector;
 
@@ -286,8 +294,8 @@ export class DraftPublicationService {
 		this.#now = options.now ?? (() => new Date());
 		this.#authority = options.authority ?? githubInstallationAuthority;
 		this.#repository = options.repository ?? getRepository;
-		const ledger = options.ledger ?? jobLedger;
-		this.#resolveCandidate = options.candidateResolver ?? ((request, principal) => this.#candidateFromLedger(ledger, request, principal));
+		this.#ledger = options.ledger ?? jobLedger;
+		this.#resolveCandidate = options.candidateResolver ?? ((request, principal) => this.#candidateFromLedger(this.#ledger, request, principal));
 		this.#inspectWorkspace = options.workspaceInspector ?? inspectWorkspace;
 		this.#migrate();
 	}
@@ -316,39 +324,58 @@ export class DraftPublicationService {
 		if (!columns.some(({ name }) => name === 'pull_state')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN pull_state TEXT');
 		if (!columns.some(({ name }) => name === 'pull_draft')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN pull_draft INTEGER');
 		if (!columns.some(({ name }) => name === 'pull_merged_at')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN pull_merged_at TEXT');
-		if (!columns.some(({ name }) => name === 'pull_closed_at')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN pull_closed_at TEXT');
+			if (!columns.some(({ name }) => name === 'pull_closed_at')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN pull_closed_at TEXT');
+		if (!columns.some(({ name }) => name === 'source_rebase_review_id')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN source_rebase_review_id TEXT');
+		if (!columns.some(({ name }) => name === 'supersedes_publication_id')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN supersedes_publication_id TEXT');
+		this.#db.exec('CREATE UNIQUE INDEX IF NOT EXISTS draft_publications_rebase_review_idx ON draft_publications(source_rebase_review_id) WHERE source_rebase_review_id IS NOT NULL');
 		this.#db.prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (9, datetime('now'))").run();
 		this.#db.prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (21, datetime('now'))").run();
+		this.#db.prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (24, datetime('now'))").run();
+		ensurePublicationRebaseReviewSchema(this.#db);
 	}
 
 	async admit(input: unknown, principal: Principal, idempotencyKey: string): Promise<DraftPublicationRecord> {
 		const request = v.parse(DraftPublicationRequestSchema, input);
+		const candidate = this.#resolveCandidate(request, principal);
+		return this.#admitCandidate(candidate, request.reason, { kind: 'run_review', request }, principal, idempotencyKey);
+	}
+
+	async admitRecovered(input: unknown, principal: Principal, idempotencyKey: string): Promise<DraftPublicationRecord> {
+		const request = v.parse(RecoveredDraftPublicationRequestSchema, input);
+		const candidate = this.#candidateFromRebaseReview(request, principal);
+		return this.#admitCandidate(candidate, request.reason, { kind: 'rebase_review', request }, principal, idempotencyKey, request.rebaseReviewId);
+	}
+
+	async #admitCandidate(candidate: PublicationCandidate, reason: string, requestIdentity: unknown, principal: Principal, idempotencyKey: string, sourceRebaseReviewId?: string): Promise<DraftPublicationRecord> {
 		if (!idempotencyKey || idempotencyKey.length > 200) throw new Error('A bounded Idempotency-Key is required');
-		const requestSha256 = hash(request);
+		const requestSha256 = hash(requestIdentity);
 		const existing = this.#db.prepare('SELECT * FROM draft_publications WHERE owner_id = ? AND idempotency_key = ?').get(principal.id, idempotencyKey) as PublicationRow | undefined;
 		if (existing) { if (existing.request_sha256 !== requestSha256) throw new PublicationConflictError('Idempotency key was already used for different input'); return rowToRecord(existing); }
-		const candidate = this.#resolveCandidate(request, principal);
 		const snapshot = await this.#inspectWorkspace(candidate);
 		const drift = snapshot.patchSha256 === candidate.approvedPatchSha256 ? undefined : 'Workspace patch no longer matches the approved review digest';
 		const blockedReason = drift ?? publicationPolicyBlock(candidate.repository, this.#repository(candidate.repository.id));
 		const id = randomUUID(); const timestamp = this.#now().toISOString();
 		const marker = `<!-- bobsled-publication:${id} patch:${candidate.approvedPatchSha256} -->`;
-		const branchName = `${candidate.repository.publicationPolicy.branchPrefix}${candidate.runId.slice(0, 8)}-${branchSlug(candidate.workItem.title)}`.slice(0, 255);
+		const branchIdentity = sourceRebaseReviewId ? `${candidate.runId.slice(0, 8)}-rebase-${sourceRebaseReviewId.slice(0, 8)}` : candidate.runId.slice(0, 8);
+		const branchName = `${candidate.repository.publicationPolicy.branchPrefix}${branchIdentity}-${branchSlug(candidate.workItem.title)}`.slice(0, 255);
 		const title = candidate.workItem.title.slice(0, 256);
 		const body = publicationBody(candidate, marker);
 		try {
 			this.#db.prepare(`INSERT INTO draft_publications
 				(id, owner_id, idempotency_key, request_sha256, run_id, run_version, job_id, attempt_id, review_id,
-				 repository_id, status, base_commit, approved_patch_sha256, branch_name, title, body, marker, required_checks_json, reason,
+				 repository_id, status, base_commit, approved_patch_sha256, source_rebase_review_id, supersedes_publication_id,
+				 branch_name, title, body, marker, required_checks_json, reason,
 				 blocked_reason, attempt_count, checks_json, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?, ?)`).run(
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?, ?)`).run(
 				id, principal.id, idempotencyKey, requestSha256, candidate.runId, candidate.runVersion,
 				candidate.jobId, candidate.attemptId, candidate.reviewId, candidate.repository.id,
 				blockedReason ? 'blocked' : 'pending', candidate.baseCommit, candidate.approvedPatchSha256,
-				branchName, title, body, marker, json(candidate.repository.publicationPolicy.requiredCheckNames), request.reason, blockedReason ?? null, timestamp, timestamp,
+				sourceRebaseReviewId ?? null, candidate.supersedesPublicationId ?? null,
+				branchName, title, body, marker, json(candidate.repository.publicationPolicy.requiredCheckNames), reason, blockedReason ?? null, timestamp, timestamp,
 			);
 		} catch (error) {
 			if (error instanceof Error && /UNIQUE constraint failed: draft_publications\.run_id/.test(error.message)) throw new PublicationConflictError('This approved review already has a publication record');
+			if (error instanceof Error && /draft_publications\.source_rebase_review_id/.test(error.message)) throw new PublicationConflictError('This recovered review already has a publication record');
 			throw error;
 		}
 		return this.get(id, principal);
@@ -367,7 +394,9 @@ export class DraftPublicationService {
 		const record = this.get(id, principal);
 		if (['published', 'checks_pending', 'checks_failed', 'ready_for_human', 'merged', 'closed'].includes(record.status)) return record;
 		const request = { runId: record.runId, expectedVersion: (this.#db.prepare('SELECT run_version FROM draft_publications WHERE id = ?').get(id) as { run_version: number }).run_version, reason: record.reason };
-		const candidate = this.#resolveCandidate(request, principal);
+		const candidate = record.sourceRebaseReviewId
+			? this.#candidateFromRebaseReview({ rebaseReviewId: record.sourceRebaseReviewId, reason: record.reason }, principal)
+			: this.#resolveCandidate(request, principal);
 		const blockedReason = publicationPolicyBlock(candidate.repository, this.#repository(record.repositoryId));
 		if (blockedReason) { this.#block(id, blockedReason); throw new PublicationPolicyBlockedError(blockedReason); }
 		if (record.attemptCount >= candidate.repository.publicationPolicy.maxAttempts) { const reason = 'Publication attempt limit reached'; this.#block(id, reason); throw new PublicationPolicyBlockedError(reason); }
@@ -451,6 +480,42 @@ export class DraftPublicationService {
 		const artifact = [...job.artifacts].reverse().find((item) => item.kind === 'review_draft_patch' && item.attemptId === attempt.id && item.metadata.reviewId === review.id);
 		if (!artifact?.digest || artifact.digest !== evidence.diffSha256) throw new PublicationConflictError('Approved review has no digest-bound draft artifact');
 		return { runId: run.id, runVersion: run.version, jobId: job.id, attemptId: attempt.id, reviewId: review.id, repository: repositoryResult.output, workItem: job.workItemSnapshot, workspacePath: evidence.workspacePath, baseCommit: evidence.baseCommit, approvedPatchSha256: evidence.diffSha256 };
+	}
+
+	#candidateFromRebaseReview(request: RecoveredDraftPublicationRequest, principal: Principal): PublicationCandidate {
+		const row = this.#db.prepare(`SELECT rr.id AS review_id, rr.owner_id, rr.status AS review_status, rr.model_calls,
+			rr.repository_id, rr.base_commit, rr.patch_sha256, rr.workspace_path, rr.report_json,
+			r.id AS rebase_id, r.status AS rebase_status, r.source_publication_id, r.new_base_commit, r.replayed_patch_sha256,
+			dp.run_id, dp.run_version, dp.job_id, dp.attempt_id
+			FROM publication_rebase_reviews rr
+			JOIN publication_rebases r ON r.id = rr.rebase_id
+			JOIN draft_publications dp ON dp.id = r.source_publication_id
+			WHERE rr.id = ?`).get(request.rebaseReviewId) as {
+			review_id: string; owner_id: string; review_status: string; model_calls: number; repository_id: string;
+			base_commit: string; patch_sha256: string; workspace_path: string; report_json: string | null;
+			rebase_id: string; rebase_status: string; source_publication_id: string; new_base_commit: string | null;
+			replayed_patch_sha256: string | null; run_id: string; run_version: number; job_id: string; attempt_id: string;
+		} | undefined;
+		if (!row) throw new PublicationConflictError('Approved recovered review does not exist');
+		if (row.owner_id !== principal.id) throw new PublicationForbiddenError('Approved recovered review belongs to another principal');
+		const report = row.report_json ? JSON.parse(row.report_json) as { verdict?: string } : undefined;
+		if (row.review_status !== 'approved' || row.model_calls !== 1 || report?.verdict !== 'approve'
+			|| row.rebase_status !== 'validated' || row.new_base_commit !== row.base_commit || row.replayed_patch_sha256 !== row.patch_sha256) {
+			throw new PublicationConflictError('Recovered review is not a complete approved replay');
+		}
+		const run = this.#ledger.get(row.run_id, principal);
+		if (run.version !== row.run_version) throw new PublicationConflictError('Recovered source run changed');
+		const job = run.jobs.find(({ id }) => id === row.job_id);
+		const attempt = job?.attempts.find(({ id }) => id === row.attempt_id);
+		if (!job || !attempt || attempt.status !== 'succeeded') throw new PublicationConflictError('Recovered source implementation lineage is unavailable');
+		const repository = this.#repository(row.repository_id);
+		if (!repository) throw new PublicationConflictError('Recovered repository is no longer enrolled');
+		if (!repository.reviewPolicy.enabled) throw new PublicationConflictError('Current repository policy no longer permits recovered review publication');
+		return {
+			runId: row.run_id, runVersion: row.run_version, jobId: row.job_id, attemptId: row.attempt_id,
+			reviewId: row.review_id, repository, workItem: job.workItemSnapshot, workspacePath: row.workspace_path,
+			baseCommit: row.base_commit, approvedPatchSha256: row.patch_sha256, supersedesPublicationId: row.source_publication_id,
+		};
 	}
 
 	#block(id: string, reason: string): void { this.#db.prepare("UPDATE draft_publications SET status = 'blocked', blocked_reason = ?, error = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?").run(reason, this.#now().toISOString(), id); }
