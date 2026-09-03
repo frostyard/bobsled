@@ -208,3 +208,35 @@ test('repository-declared workspace preparation runs before and can prevent work
 		rmSync(value.root, { recursive: true, force: true });
 	}
 });
+
+test('claimed prepared execution blocks post-preflight workspace tampering without a worker call', async () => {
+	const value = fixture();
+	const execution = value.ledger.authorizeExecution(value.run.id, {
+		expectedVersion: value.run.version,
+		reason: 'Simulate one already claimed coordinated member attempt.',
+	}, principal);
+	const attemptRoot = join(value.workspaces, 'multi-repository-change-sets', crypto.randomUUID(), 'members', crypto.randomUUID());
+	const workspacePath = join(attemptRoot, 'repo');
+	const evidencePath = join(attemptRoot, 'evidence');
+	mkdirSync(evidencePath, { recursive: true });
+	execFileSync('git', ['-C', value.source, 'worktree', 'add', '--detach', workspacePath, 'HEAD']);
+	value.ledger.markExecutionRunning(execution, principal);
+	writeFileSync(join(workspacePath, 'tampered.txt'), 'changed after preflight\n');
+	let workerCalls = 0;
+	try {
+		const completed = await new ExecutionService({
+			ledger: value.ledger, workspaceRoot: value.workspaces, executablePath: value.executablePath,
+			worker: async () => { workerCalls += 1; return outcome([], 'no_change'); },
+		}).executeClaimed(execution, {
+			attemptRoot, workspacePath, evidencePath, sandboxHomePath: join(attemptRoot, 'execution-home'),
+			toolDataPath: join(value.workspaces, 'tool-cache', 'frostyard__clix', 'mise'),
+			artifactRootUri: `workspace://multi-repository-change-sets/test/members/${execution.attemptId}`,
+		}, execFileSync('git', ['-C', workspacePath, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), {
+			name: 'Prepared already', command: 'mise install', networkAccess: true, status: 'passed', exitCode: 0,
+			durationMs: 1, stdout: '', stderr: '', truncated: false,
+		}, principal);
+		assert.equal(workerCalls, 0);
+		assert.equal(completed.status, 'failed');
+		assert.match(JSON.stringify(completed.jobs[0]?.attempts[0]?.outcome), /changed after its trusted preflight/);
+	} finally { value.ledger.close(); rmSync(value.root, { recursive: true, force: true }); }
+});

@@ -44,7 +44,7 @@ export const MultiRepositoryMemberPreparationLeaseSchema = v.object({
 	runId: v.pipe(v.string(), v.uuid()),
 	jobId: v.pipe(v.string(), v.uuid()),
 	ownerId: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
-	status: v.picklist(['reserved', 'preparing', 'prepared', 'blocked', 'expired']),
+	status: v.picklist(['reserved', 'preparing', 'prepared', 'consumed', 'blocked', 'expired']),
 	unitSha256: Sha256Schema,
 	policySnapshotSha256: Sha256Schema,
 	policySnapshot: RepositoryContractSchema,
@@ -299,14 +299,14 @@ export class MultiRepositoryMemberPreparationLeaseStore {
 				? Boolean(row.started_at) && !row.finished_at && !preparationRow
 				: row.status === 'expired'
 					? !row.started_at && Boolean(row.finished_at) && !preparationRow
-					: ['prepared', 'blocked'].includes(row.status) && Boolean(row.started_at) && Boolean(row.finished_at) && Boolean(preparationRow);
+					: ['prepared', 'consumed', 'blocked'].includes(row.status) && Boolean(row.started_at) && Boolean(row.finished_at) && Boolean(preparationRow);
 		if (!lifecycleValid || row.change_set_id !== schedule.changeSetId || !member
 			|| row.run_id !== member.runId || row.job_id !== member.jobId || row.unit_sha256 !== member.unitSha256
 			|| digest(policySnapshot) !== row.policy_snapshot_sha256
 			|| row.expires_at !== expectedExpiresAt
 			|| (preparationRow && digest(preparationResult) !== preparationRow.result_sha256)
 			|| (preparationResult && (preparationResult.leaseId !== row.id || preparationResult.repositoryId !== row.repository_id
-				|| (row.status === 'prepared') !== isPassingPreparation(preparationResult)
+				|| (['prepared', 'consumed'].includes(row.status)) !== isPassingPreparation(preparationResult)
 				|| (preparationResult.status === 'blocked' && (preparationResult.workspaceReady || preparationResult.violations.length === 0))))
 			|| digest({ scheduleId: row.schedule_id, repositoryId: row.repository_id, reason: row.reason }) !== row.request_sha256) {
 			throw new MultiRepositoryPreparationLeaseConflictError('Stored preparation lease failed schedule, member, policy, or request integrity verification');

@@ -98,6 +98,43 @@ test('automatic review is policy-authored without a second operator approval', a
 	} finally { value.ledger.close(); rmSync(value.root, { recursive: true, force: true }); }
 });
 
+test('automatic review follows trusted attempt evidence outside the legacy run directory', async () => {
+	const value = fixture();
+	const execution = value.ledger.authorizeExecution(value.run.id, {
+		expectedVersion: value.run.version,
+		reason: 'A coordinated member supplies its already prepared trusted workspace.',
+	}, principal);
+	const attemptRoot = join(value.workspaces, 'multi-repository-change-sets', crypto.randomUUID(), 'members', crypto.randomUUID());
+	const workspacePath = join(attemptRoot, 'repo');
+	const evidencePath = join(attemptRoot, 'evidence');
+	mkdirSync(evidencePath, { recursive: true });
+	execFileSync('git', ['-C', value.source, 'worktree', 'add', '--detach', workspacePath, 'HEAD']);
+	value.ledger.markExecutionRunning(execution, principal);
+	const baseCommit = execFileSync('git', ['-C', workspacePath, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+	const service = new ExecutionService({ ledger: value.ledger, worker: implementationWorker, workspaceRoot: value.workspaces, executablePath: value.executablePath });
+	const run = await service.executeClaimed(execution, {
+		attemptRoot, workspacePath, evidencePath,
+		sandboxHomePath: join(attemptRoot, 'execution-home'), toolDataPath: join(value.workspaces, 'tool-cache', 'frostyard__clix', 'mise'),
+		artifactRootUri: `workspace://multi-repository-change-sets/test/members/${execution.attemptId}`,
+	}, baseCommit, {
+		name: 'Prepared already', command: 'mise install', networkAccess: true, status: 'passed', exitCode: 0,
+		durationMs: 1, stdout: '', stderr: '', truncated: false,
+	}, principal);
+	let reviewerCalls = 0;
+	const reviewer: ReviewWorkerRunner = async (input) => {
+		reviewerCalls += 1;
+		assert.equal(input.evidence.workspacePath, workspacePath);
+		return { conversationId: 'external-review', submissionId: 'external-review', report: approve, text: 'Approved.' };
+	};
+	try {
+		const reviewed = await new ReviewService({ ledger: value.ledger, reviewer, workspaceRoot: value.workspaces, executablePath: value.executablePath })
+			.reviewAutomatically(run.id, run.version, principal);
+		assert.equal(reviewerCalls, 1);
+		assert.equal(reviewed.jobs[0]?.reviews[0]?.status, 'approved');
+		assert.equal(reviewed.jobs[0]?.artifacts.some(({ kind, uri }) => kind === 'review_draft_patch' && uri.includes('/multi-repository-change-sets/')), true);
+	} finally { value.ledger.close(); rmSync(value.root, { recursive: true, force: true }); }
+});
+
 test('one bounded Codex remediation round is followed by gates and a fresh final Copilot review', async () => {
 	const value = fixture();
 	let reviewCalls = 0;
