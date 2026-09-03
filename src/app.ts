@@ -34,6 +34,7 @@ import { IntakeConversationRevisionService } from './control-plane/intake-conver
 import { IntakeBriefSnapshotConflictError, IntakeBriefSnapshotForbiddenError, IntakeBriefSnapshotNotFoundError, IntakeBriefSnapshotStore } from './control-plane/intake-brief-snapshot-store.ts';
 import { IntakeSnapshotTriageConflictError, IntakeSnapshotTriageForbiddenError, IntakeSnapshotTriageNotFoundError, IntakeSnapshotTriageStore } from './control-plane/intake-snapshot-triage-store.ts';
 import { IntakeSnapshotTriageService } from './control-plane/intake-snapshot-triage-service.ts';
+import { IntakeSnapshotRunAdmissionConflictError, IntakeSnapshotRunAdmissionForbiddenError, IntakeSnapshotRunAdmissionNotFoundError, IntakeSnapshotRunAdmissionService, IntakeSnapshotRunAdmissionStore } from './control-plane/intake-snapshot-run-admission-store.ts';
 import { controlPlaneHtml } from './control-plane/ui.ts';
 import { projectOperatorBoard } from './control-plane/operator-board-view.ts';
 import { MultiWorkerOperatorStore } from './control-plane/multi-worker-operator-view.ts';
@@ -88,6 +89,8 @@ const intakeRevisionService = new IntakeConversationRevisionService(intakeRevisi
 const intakeSnapshots = new IntakeBriefSnapshotStore(undefined, undefined, intakeConversations);
 const intakeSnapshotTriages = new IntakeSnapshotTriageStore(undefined, undefined, intakeSnapshots);
 const intakeSnapshotTriageService = new IntakeSnapshotTriageService(intakeSnapshotTriages);
+const intakeSnapshotRunAdmissions = new IntakeSnapshotRunAdmissionStore(undefined, undefined, intakeSnapshotTriages, intakeConversations, jobLedger);
+const intakeSnapshotRunAdmissionService = new IntakeSnapshotRunAdmissionService(intakeSnapshotRunAdmissions, jobLedger);
 
 app.use('*', async (context, next) => {
 	const publicPath = context.req.path === '/health' ||
@@ -139,9 +142,9 @@ function githubActionError(context: Parameters<Parameters<typeof app.onError>[0]
 
 function intakeConversationError(context: Parameters<Parameters<typeof app.onError>[0]>[1], error: unknown) {
 	const message = error instanceof Error ? error.message : 'Conversational intake failed';
-	if (error instanceof IntakeConversationNotFoundError || error instanceof IntakeConversationRevisionNotFoundError || error instanceof IntakeBriefSnapshotNotFoundError || error instanceof IntakeSnapshotTriageNotFoundError) return context.json({ error: message }, 404);
-	if (error instanceof IntakeConversationForbiddenError || error instanceof IntakeConversationRevisionForbiddenError || error instanceof IntakeBriefSnapshotForbiddenError || error instanceof IntakeSnapshotTriageForbiddenError) return context.json({ error: message }, 403);
-	if (error instanceof IntakeConversationConflictError || error instanceof IntakeConversationRevisionConflictError || error instanceof IntakeBriefSnapshotConflictError || error instanceof IntakeSnapshotTriageConflictError) return context.json({ error: message }, 409);
+	if (error instanceof IntakeConversationNotFoundError || error instanceof IntakeConversationRevisionNotFoundError || error instanceof IntakeBriefSnapshotNotFoundError || error instanceof IntakeSnapshotTriageNotFoundError || error instanceof IntakeSnapshotRunAdmissionNotFoundError) return context.json({ error: message }, 404);
+	if (error instanceof IntakeConversationForbiddenError || error instanceof IntakeConversationRevisionForbiddenError || error instanceof IntakeBriefSnapshotForbiddenError || error instanceof IntakeSnapshotTriageForbiddenError || error instanceof IntakeSnapshotRunAdmissionForbiddenError) return context.json({ error: message }, 403);
+	if (error instanceof IntakeConversationConflictError || error instanceof IntakeConversationRevisionConflictError || error instanceof IntakeBriefSnapshotConflictError || error instanceof IntakeSnapshotTriageConflictError || error instanceof IntakeSnapshotRunAdmissionConflictError || error instanceof LedgerConflictError) return context.json({ error: message }, 409);
 	return context.json({ error: message }, 400);
 }
 
@@ -337,6 +340,16 @@ app.get('/api/intake-conversations/:conversationId/snapshot/triage', (context) =
 
 app.post('/api/intake-conversations/:conversationId/snapshot/triage', async (context) => {
 	try { const snapshot=intakeSnapshots.getForConversation(context.req.param('conversationId'),context.get('principal')),triage=intakeSnapshotTriages.reserve({snapshotId:snapshot.id,reason:'Operator explicitly requested independent triage of this immutable final brief.'},context.get('principal'),context.req.header('idempotency-key')??'');return context.json(await intakeSnapshotTriageService.run(triage.id,context.get('principal')),201); }
+	catch (error) { return intakeConversationError(context,error); }
+});
+
+app.get('/api/intake-conversations/:conversationId/snapshot/admission', (context) => {
+	try { const snapshot=intakeSnapshots.getForConversation(context.req.param('conversationId'),context.get('principal')),triage=intakeSnapshotTriages.getForSnapshot(snapshot.id,context.get('principal'));if(!triage)return context.json(null);return context.json(intakeSnapshotRunAdmissions.getForTriage(triage.id,context.get('principal'))??null); }
+	catch (error) { return intakeConversationError(context,error); }
+});
+
+app.post('/api/intake-conversations/:conversationId/snapshot/admission', async (context) => {
+	try { const snapshot=intakeSnapshots.getForConversation(context.req.param('conversationId'),context.get('principal')),triage=intakeSnapshotTriages.getForSnapshot(snapshot.id,context.get('principal'));if(!triage)throw new IntakeSnapshotRunAdmissionConflictError('Independent snapshot triage is required before run admission');const admission=intakeSnapshotRunAdmissions.reserve({triageId:triage.id,reason:'Operator explicitly admitted this immutable snapshot and independent triage as a ledger run.'},context.get('principal'),context.req.header('idempotency-key')??'');return context.json(intakeSnapshotRunAdmissionService.admit(admission.id,context.get('principal')),201); }
 	catch (error) { return intakeConversationError(context,error); }
 });
 

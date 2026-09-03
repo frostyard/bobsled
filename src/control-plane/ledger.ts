@@ -183,10 +183,19 @@ export class JobLedger {
 	}
 
 	admit(input: unknown, principal: Principal, idempotencyKey: string): RunRecord {
+		return this.#admit(input, principal, idempotencyKey);
+	}
+
+	admitWithExpectedPolicy(input: unknown, expectedPolicy: unknown, principal: Principal, idempotencyKey: string): RunRecord {
+		return this.#admit(input, principal, idempotencyKey, hash(v.parse(RepositoryContractSchema, expectedPolicy)));
+	}
+
+	#admit(input: unknown, principal: Principal, idempotencyKey: string, expectedPolicyHash?: string): RunRecord {
 		const request = v.parse(AdmitRunRequestSchema, input);
 		if (!idempotencyKey || idempotencyKey.length > 200) throw new Error('A bounded Idempotency-Key is required');
 		const repository = this.#repositoryResolver(request.repositoryId);
 		if (!repository) throw new LedgerNotFoundError(`Repository is not enrolled: ${request.repositoryId}`);
+		if (expectedPolicyHash !== undefined && hash(repository) !== expectedPolicyHash) throw new LedgerConflictError('Repository policy changed after trusted intake triage');
 		const requestHash = hash(request);
 
 		return this.#db.transaction(() => {
@@ -205,7 +214,7 @@ export class JobLedger {
 			const runId = randomUUID();
 			const jobId = randomUUID();
 			const timestamp = this.#now().toISOString();
-			const blocked = request.triageDecision !== undefined && request.triageDecision.route !== 'ready_for_agent';
+			const blocked = request.triageDecision !== undefined && !request.triageDecision.eligibleForOneClick;
 			this.#db.prepare(`INSERT INTO runs
 				(id, owner_id, status, idempotency_key, request_hash, supersedes_run_id, version, created_at, updated_at)
 				VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`)

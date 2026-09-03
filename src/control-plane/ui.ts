@@ -153,7 +153,7 @@ export function controlPlaneHtml(identity: ControlPlaneIdentity): string {
   <section class="panel ledger" id="conversation-panel">
     <div class="board-heading"><div><div class="eyebrow">Principal-owned · one repository</div><h2>Conversational intake</h2></div><div id="conversation-status" class="eyebrow">No active conversation</div></div>
     <div class="conversation-workspace">
-      <div><div id="conversation-title" class="notice">Choose “Refine in chat” on a task or issue.</div><div id="chat-log" class="chat-log"></div><form id="chat-form"><label>Clarification or correction<textarea id="chat-message" maxlength="20000" placeholder="Add context, answer a question, or correct the live brief"></textarea></label><div class="toolbar"><button id="chat-submit">Revise brief once</button><button type="button" id="chat-finalize">Finalize brief</button><button type="button" id="chat-triage">Run independent triage</button><button type="button" class="danger" id="chat-cancel">Cancel conversation</button></div></form></div>
+      <div><div id="conversation-title" class="notice">Choose “Refine in chat” on a task or issue.</div><div id="chat-log" class="chat-log"></div><form id="chat-form"><label>Clarification or correction<textarea id="chat-message" maxlength="20000" placeholder="Add context, answer a question, or correct the live brief"></textarea></label><div class="toolbar"><button id="chat-submit">Revise brief once</button><button type="button" id="chat-finalize">Finalize brief</button><button type="button" id="chat-triage">Run independent triage</button><button type="button" id="chat-admit">Admit triaged run</button><button type="button" class="danger" id="chat-cancel">Cancel conversation</button></div></form></div>
       <div><h2>Live structured brief</h2><div id="live-brief" class="result"><span class="eyebrow">The schema-valid brief will appear here.</span></div></div>
     </div>
   </section>
@@ -199,8 +199,10 @@ const liveBrief = document.querySelector('#live-brief');
 const chatSubmit = document.querySelector('#chat-submit');
 const chatFinalize = document.querySelector('#chat-finalize');
 const chatTriage = document.querySelector('#chat-triage');
+const chatAdmit = document.querySelector('#chat-admit');
 let activeConversation;
 let activeSnapshot;
+let activeAdmission;
 let boardCards = [];
 let boardPoll;
 
@@ -258,16 +260,17 @@ function appendBriefBlock(label, value) {
   liveBrief.append(block);
 }
 
-function renderConversation(conversation, revision, shouldScroll=true, snapshot, triage) {
-  activeConversation = conversation; activeSnapshot = snapshot; conversationStatus.textContent = triage ? 'independent triage ' + triage.status + ' · snapshot ' + snapshot.briefSha256.slice(0,12) : snapshot ? 'finalized · immutable snapshot ' + snapshot.briefSha256.slice(0,12) : revision ? 'revision ' + revision.status + ' · conversation version ' + conversation.version : conversation.status + ' · version ' + conversation.version; conversationTitle.textContent = conversation.seed.title; chatLog.textContent = ''; liveBrief.textContent = '';
+function renderConversation(conversation, revision, shouldScroll=true, snapshot, triage, admission) {
+  activeConversation = conversation; activeSnapshot = snapshot; activeAdmission = admission; conversationStatus.textContent = admission ? 'run admitted · snapshot ' + snapshot.briefSha256.slice(0,12) : triage ? 'independent triage ' + triage.status + ' · snapshot ' + snapshot.briefSha256.slice(0,12) : snapshot ? 'finalized · immutable snapshot ' + snapshot.briefSha256.slice(0,12) : revision ? 'revision ' + revision.status + ' · conversation version ' + conversation.version : conversation.status + ' · version ' + conversation.version; conversationTitle.textContent = conversation.seed.title; chatLog.textContent = ''; liveBrief.textContent = '';
   if (!conversation.turns.length) { const empty = document.createElement('div'); empty.className = 'eyebrow'; empty.textContent = 'Brief initialized. Add the first clarification below.'; chatLog.append(empty); }
   for (const turn of conversation.turns) { const node = document.createElement('div'); node.className = 'chat-turn ' + turn.role; const role = document.createElement('small'); role.textContent = turn.role + ' · turn ' + turn.sequence; const text = document.createElement('div'); text.textContent = turn.text; node.append(role,text); chatLog.append(node); }
   const brief = conversation.currentBrief; appendBriefBlock('Objective',brief.objective); appendBriefBlock('Context',brief.context); appendBriefBlock('Acceptance criteria',brief.acceptanceCriteria); appendBriefBlock('Constraints',brief.constraints); appendBriefBlock('Non-goals',brief.nonGoals); appendBriefBlock('Assumptions',brief.assumptions); appendBriefBlock('Unresolved questions',brief.unresolvedQuestions);
   if (revision && revision.status === 'failed') { const failure=document.createElement('div');failure.className='error';failure.textContent=revision.error||'The claimed revision failed.';chatLog.append(failure); }
   if (snapshot) { const frozen=document.createElement('div');frozen.className='notice';frozen.textContent='Immutable final brief · '+snapshot.sourceTurnCount+' source turns · '+(triage?'bound to one independent triage':'triage not yet authorized');liveBrief.prepend(frozen); }
   if (triage?.result) { const decision=triage.result.decision,triaged=document.createElement('div');triaged.className='notice';triaged.textContent='Independent triage · '+decision.route+' · '+decision.risk+' risk · '+decision.summary;liveBrief.prepend(triaged); }
+  if (admission) { const admitted=document.createElement('div');admitted.className='notice';admitted.textContent='Immutable intake admission · run '+admission.runId;liveBrief.prepend(admitted); }
   if (triage?.status === 'failed') { const failure=document.createElement('div');failure.className='error';failure.textContent=triage.error||'Independent triage failed after its one claimed call.';liveBrief.prepend(failure); }
-  const busy = revision && ['reserved','running'].includes(revision.status); const active = conversation.status === 'active' && !busy; chatSubmit.disabled = !active; chatFinalize.disabled = !active; chatTriage.disabled = !snapshot || Boolean(triage&&triage.status!=='blocked'); chatTriage.textContent=triage?.status==='blocked'?'Retry independent triage':triage?'Independent triage: '+triage.status:'Run independent triage'; document.querySelector('#chat-message').disabled = !active; document.querySelector('#chat-cancel').disabled = !active; if(shouldScroll)conversationPanel.scrollIntoView({behavior:'smooth',block:'start'});
+  const busy = revision && ['reserved','running'].includes(revision.status); const active = conversation.status === 'active' && !busy; chatSubmit.disabled = !active; chatFinalize.disabled = !active; chatTriage.disabled = !snapshot || Boolean(triage&&triage.status!=='blocked'); chatTriage.textContent=triage?.status==='blocked'?'Retry independent triage':triage?'Independent triage: '+triage.status:'Run independent triage'; chatAdmit.disabled=!triage||triage.status!=='succeeded'||Boolean(admission);chatAdmit.textContent=admission?'Run admitted':'Admit triaged run'; document.querySelector('#chat-message').disabled = !active; document.querySelector('#chat-cancel').disabled = !active; if(shouldScroll)conversationPanel.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 async function startConversation(workItem) {
@@ -282,7 +285,7 @@ async function reviseConversation(message) {
 }
 
 async function loadLatestConversation() {
-  const conversations=await json('/api/intake-conversations'); const latest=conversations.find((conversation)=>conversation.status==='active')||conversations[0]; if(latest){const revisions=await json('/api/intake-conversations/'+latest.id+'/revisions');const snapshot=latest.status==='finalized'?await json('/api/intake-conversations/'+latest.id+'/snapshot'):undefined;const triage=snapshot?await json('/api/intake-conversations/'+latest.id+'/snapshot/triage'):undefined;renderConversation(latest,revisions.at(-1),false,snapshot,triage);}
+  const conversations=await json('/api/intake-conversations'); const latest=conversations.find((conversation)=>conversation.status==='active')||conversations[0]; if(latest){const revisions=await json('/api/intake-conversations/'+latest.id+'/revisions');const snapshot=latest.status==='finalized'?await json('/api/intake-conversations/'+latest.id+'/snapshot'):undefined;const triage=snapshot?await json('/api/intake-conversations/'+latest.id+'/snapshot/triage'):undefined;const admission=triage?await json('/api/intake-conversations/'+latest.id+'/snapshot/admission'):undefined;renderConversation(latest,revisions.at(-1),false,snapshot,triage,admission);}
 }
 
 function renderDecision(payload, workItem) {
@@ -723,6 +726,7 @@ document.querySelector('#chat-form').addEventListener('submit',(event)=>{event.p
 document.querySelector('#chat-cancel').addEventListener('click',async()=>{if(!activeConversation)return;const reason=window.prompt('Cancellation reason (recorded durably):','Operator chose to stop refining this brief.');if(!reason)return;try{renderConversation(await json('/api/intake-conversations/'+activeConversation.id+'/cancel',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:activeConversation.version,reason})}));}catch(error){showError(error);}});
 chatFinalize.addEventListener('click',async()=>{if(!activeConversation)return;const reason=window.prompt('Finalization reason (recorded durably):','Operator confirmed this brief is ready for independent triage.');if(!reason)return;try{const payload=await json('/api/intake-conversations/'+activeConversation.id+'/finalize',{method:'POST',headers:{'content-type':'application/json','idempotency-key':browserUuid()},body:JSON.stringify({expectedVersion:activeConversation.version,reason})});renderConversation(payload.conversation,undefined,true,payload.snapshot);}catch(error){showError(error);}});
 chatTriage.addEventListener('click',async()=>{if(!activeConversation||!activeSnapshot)return;chatTriage.disabled=true;conversationStatus.textContent='Independent Codex triage is running once…';try{const triage=await json('/api/intake-conversations/'+activeConversation.id+'/snapshot/triage',{method:'POST',headers:{'content-type':'application/json','idempotency-key':browserUuid()},body:'{}'});renderConversation(activeConversation,undefined,true,activeSnapshot,triage);}catch(error){showError(error);chatTriage.disabled=false;}});
+chatAdmit.addEventListener('click',async()=>{if(!activeConversation||!activeSnapshot||activeAdmission)return;chatAdmit.disabled=true;try{const payload=await json('/api/intake-conversations/'+activeConversation.id+'/snapshot/admission',{method:'POST',headers:{'content-type':'application/json','idempotency-key':browserUuid()},body:'{}'});renderConversation(activeConversation,undefined,true,activeSnapshot,await json('/api/intake-conversations/'+activeConversation.id+'/snapshot/triage'),payload.admission);renderAdmission(payload.run);await refreshRuns();}catch(error){showError(error);chatAdmit.disabled=false;}});
 document.querySelector('#refresh-runs').addEventListener('click', loadRuns);
 boardSearch.addEventListener('input', renderRuns);
 boardRepo.addEventListener('change', renderRuns);
