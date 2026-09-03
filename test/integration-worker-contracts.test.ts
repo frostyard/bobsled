@@ -29,6 +29,7 @@ function initialData() {
 		integrationAttemptId: randomUUID(), assemblyId: randomUUID(), workspacePath: '/tmp/workspace',
 		sandboxHomePath: '/tmp/home', toolDataPath: '/tmp/tools', executablePath: '/usr/bin',
 		baseCommit, assemblyPatchSha256: assemblyDigest, plan, taskId: 'integration',
+		assemblyChangedPaths: ['src/api/client.ts'],
 		repository: getRepository('frostyard/bobsled'),
 		workItem: { source: 'manual', key: 'integration-test', title: 'Connect API and UI', body: '', labels: [] },
 		maxWorkerCalls: 1,
@@ -41,7 +42,9 @@ test('accepts one scoped unstaged worker delta while authorizing no further call
 		disposition: 'changed', summary: 'Connected both layers.', changedPaths: ['src/integration/index.ts'], testsRun: ['npm test'], notes: [],
 	}, {
 		headCommit: baseCommit, stagedPatchSha256: assemblyDigest,
-		workerChangedPaths: ['src/integration/index.ts'], finalPatchSha256: finalDigest,
+		workerChangedPaths: ['src/integration/index.ts'],
+		finalChangedPaths: ['src/api/client.ts', 'src/integration/index.ts'], diffLines: 10,
+		finalPatchSha256: finalDigest,
 	}), {
 		integrationAttemptId: input.integrationAttemptId,
 		taskId: 'integration', status: 'succeeded', workerCallCount: 1,
@@ -56,7 +59,8 @@ test('blocks index mutation, moved HEAD, scope escape, and false model path clai
 		disposition: 'changed', summary: 'Claimed integration.', changedPaths: ['src/integration/index.ts'], testsRun: [], notes: [],
 	}, {
 		headCommit: 'd'.repeat(40), stagedPatchSha256: 'e'.repeat(64),
-		workerChangedPaths: ['src/api/escaped.ts'], finalPatchSha256: finalDigest,
+		workerChangedPaths: ['src/api/escaped.ts'], finalChangedPaths: ['src/api/client.ts', 'src/api/escaped.ts'],
+		diffLines: 10, finalPatchSha256: finalDigest,
 	});
 	assert.equal(result.status, 'blocked');
 	assert.deepEqual(result.violations, ['head_moved', 'index_changed', 'scope_violation', 'reported_paths_mismatch']);
@@ -69,13 +73,14 @@ test('requires no-change evidence to preserve both paths and final patch digest'
 		disposition: 'no_change', summary: 'Already integrated.', changedPaths: [], testsRun: [], notes: [],
 	}, {
 		headCommit: baseCommit, stagedPatchSha256: assemblyDigest,
-		workerChangedPaths: [], finalPatchSha256: assemblyDigest,
+		workerChangedPaths: [], finalChangedPaths: ['src/api/client.ts'], diffLines: 5, finalPatchSha256: assemblyDigest,
 	}).status, 'succeeded');
 	assert.deepEqual(evaluateIntegrationWorker(input, {
 		disposition: 'no_change', summary: 'Already integrated.', changedPaths: [], testsRun: [], notes: [],
 	}, {
 		headCommit: baseCommit, stagedPatchSha256: assemblyDigest,
-		workerChangedPaths: ['src/integration/index.ts'], finalPatchSha256: finalDigest,
+		workerChangedPaths: ['src/integration/index.ts'], finalChangedPaths: ['src/api/client.ts', 'src/integration/index.ts'],
+		diffLines: 10, finalPatchSha256: finalDigest,
 	}).violations, ['reported_paths_mismatch', 'disposition_mismatch', 'final_patch_mismatch']);
 });
 
@@ -86,6 +91,28 @@ test('refuses root tasks and always blocks a worker-reported safety stop', () =>
 		disposition: 'blocked', summary: 'Cannot integrate safely.', changedPaths: [], testsRun: [], notes: [],
 	}, {
 		headCommit: baseCommit, stagedPatchSha256: assemblyDigest,
-		workerChangedPaths: [], finalPatchSha256: assemblyDigest,
+		workerChangedPaths: [], finalChangedPaths: ['src/api/client.ts'], diffLines: 5, finalPatchSha256: assemblyDigest,
 	}).violations, ['worker_blocked']);
+});
+
+test('enforces final aggregate size and protected-path policy', () => {
+	const input = initialData();
+	const restricted = {
+		...input,
+		repository: {
+			...input.repository,
+			executionPolicy: { ...input.repository.executionPolicy, maxFiles: 1, maxDiffLines: 1 },
+			protectedBoundaries: [{
+				id: 'integration-boundary', paths: ['src/integration/**'], minimumRisk: 'high' as const, requiresHumanReview: true as const,
+			}],
+		},
+	};
+	const result = evaluateIntegrationWorker(restricted, {
+		disposition: 'changed', summary: 'Integrated.', changedPaths: ['src/integration/index.ts'], testsRun: [], notes: [],
+	}, {
+		headCommit: baseCommit, stagedPatchSha256: assemblyDigest,
+		workerChangedPaths: ['src/integration/index.ts'], finalChangedPaths: ['src/api/client.ts', 'src/integration/index.ts'],
+		diffLines: 10, finalPatchSha256: finalDigest,
+	});
+	assert.deepEqual(result.violations, ['file_limit', 'diff_limit', 'protected_path']);
 });
