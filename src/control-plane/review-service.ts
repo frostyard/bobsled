@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import * as v from 'valibot';
 import {
 	DraftPatchEvidenceSchema,
@@ -47,6 +47,7 @@ interface ReviewPaths {
 	reviewEvidencePath: string;
 	sandboxHomePath: string;
 	toolDataPath: string;
+	artifactRootUri: string;
 }
 
 export interface ReviewServiceOptions {
@@ -139,7 +140,7 @@ export class ReviewService {
 		let final: ReviewOutcome | undefined;
 		let remediation: RemediationOutcome | undefined;
 		try {
-			paths = await this.#paths(review);
+			paths = await this.#paths(review, principal);
 			this.#ledger.markReviewRunning(review, principal);
 			const implementationPlan = v.parse(ImplementationPlanSchema, JSON.parse(await readFile(resolve(paths.implementationEvidencePath, 'implementation-plan.json'), 'utf8')));
 			const worker = parseStoredWorkerOutcome(JSON.parse(await readFile(resolve(paths.implementationEvidencePath, 'worker-result.json'), 'utf8')));
@@ -193,7 +194,7 @@ export class ReviewService {
 			const evidencePath = paths?.reviewEvidencePath ?? resolve(this.#workspaceRoot, 'runs', review.jobId, `${review.attemptNumber}-${review.attemptId}`, 'evidence', 'reviews', `${review.reviewNumber}-${review.reviewId}`);
 			await mkdir(evidencePath, { recursive: true, mode: 0o700 });
 			await writeFile(resolve(evidencePath, 'review-error.json'), `${JSON.stringify({ error: message }, null, 2)}\n`, { mode: 0o600 });
-			return this.#ledger.completeReview(review, 'failed', initial?.report, final?.report, { error: message }, [{ kind: 'review_error', uri: this.#artifactUri(review, 'review-error.json'), metadata: { message } }], principal);
+			return this.#ledger.completeReview(review, 'failed', initial?.report, final?.report, { error: message }, [{ kind: 'review_error', uri: this.#artifactUri(review, 'review-error.json', paths), metadata: { message } }], principal);
 		}
 	}
 
@@ -208,16 +209,35 @@ export class ReviewService {
 		return await realpath(destination);
 	}
 
-	async #paths(review: AuthorizedReview): Promise<ReviewPaths> {
-		const attemptRoot = resolve(this.#workspaceRoot, 'runs', review.jobId, `${review.attemptNumber}-${review.attemptId}`);
-		const workspacePath = resolve(attemptRoot, 'repo');
-		if (await realpath(workspacePath).catch(() => undefined) !== workspacePath) throw new Error('Preserved implementation worktree is unavailable');
-		const implementationEvidencePath = resolve(attemptRoot, 'evidence');
+	async #paths(review: AuthorizedReview, principal: Principal): Promise<ReviewPaths> {
+		const run = this.#ledger.get(review.runId, principal);
+		const job = run.jobs.find(({ id }) => id === review.jobId);
+		const attempt = job?.attempts.find(({ id }) => id === review.attemptId);
+		const storedEvidence = v.safeParse(DraftPatchEvidenceSchema, (attempt?.outcome as { evidence?: unknown } | undefined)?.evidence);
+		if (!storedEvidence.success) throw new Error('Successful implementation attempt lacks trusted draft evidence');
+		const workspacePath = resolve(storedEvidence.output.workspacePath);
+		const implementationEvidencePath = resolve(storedEvidence.output.evidencePath);
+		const root = await realpath(this.#workspaceRoot).catch(() => undefined);
+		if (!root || !workspacePath.startsWith(`${root}/`) || !implementationEvidencePath.startsWith(`${root}/`)
+			|| await realpath(workspacePath).catch(() => undefined) !== workspacePath
+			|| await realpath(implementationEvidencePath).catch(() => undefined) !== implementationEvidencePath) {
+			throw new Error('Preserved implementation worktree or evidence is unavailable');
+		}
+		const attemptRoot = dirname(workspacePath);
 		const reviewEvidencePath = resolve(implementationEvidencePath, 'reviews', `${review.reviewNumber}-${review.reviewId}`);
-		const sandboxHomePath = resolve(attemptRoot, 'home');
+		const executionSummaryUri = job?.artifacts.find(({ attemptId, kind }) => attemptId === review.attemptId && kind === 'execution_summary')?.uri;
+		const implementationArtifactRoot = executionSummaryUri?.endsWith('/evidence/summary.json')
+			? executionSummaryUri.slice(0, -'/evidence/summary.json'.length)
+			: `workspace://runs/${review.jobId}/${review.attemptNumber}-${review.attemptId}`;
+		const sandboxHomePath = resolve(attemptRoot, 'review-home');
 		const toolDataPath = resolve(this.#workspaceRoot, 'tool-cache', review.repository.id.replace('/', '__'), 'mise');
 		await mkdir(reviewEvidencePath, { recursive: true, mode: 0o700 });
-		return { attemptRoot, workspacePath, implementationEvidencePath, reviewEvidencePath, sandboxHomePath, toolDataPath };
+		await mkdir(resolve(sandboxHomePath, 'tmp'), { recursive: true, mode: 0o700 });
+		await mkdir(resolve(toolDataPath, 'cache'), { recursive: true, mode: 0o700 });
+		return {
+			attemptRoot, workspacePath, implementationEvidencePath, reviewEvidencePath, sandboxHomePath, toolDataPath,
+			artifactRootUri: `${implementationArtifactRoot}/evidence/reviews/${review.reviewNumber}-${review.reviewId}`,
+		};
 	}
 
 	async #runGates(review: AuthorizedReview, paths: ReviewPaths): Promise<GateResult[]> {
@@ -262,23 +282,23 @@ export class ReviewService {
 
 	#complete(review: AuthorizedReview, status: 'approved' | 'blocked', paths: ReviewPaths, initial: ReviewOutcome, final: ReviewOutcome | undefined, remediation: RemediationOutcome | undefined, outcome: unknown, principal: Principal, evidence?: DraftPatchEvidence): RunRecord {
 		const artifacts: ExecutionArtifactInput[] = [
-			{ kind: 'review_initial', uri: this.#artifactUri(review, 'initial-review.json'), metadata: { verdict: initial.report.verdict, findings: initial.report.findings.length } },
-			{ kind: 'review_repository_context', uri: this.#artifactUri(review, 'repository-context-initial'), metadata: { round: 'initial', mode: 'read_only_repository', shell: false, network: false, mutation: false } },
+			{ kind: 'review_initial', uri: this.#artifactUri(review, 'initial-review.json', paths), metadata: { verdict: initial.report.verdict, findings: initial.report.findings.length } },
+			{ kind: 'review_repository_context', uri: this.#artifactUri(review, 'repository-context-initial', paths), metadata: { round: 'initial', mode: 'read_only_repository', shell: false, network: false, mutation: false } },
 		];
-		if (remediation) artifacts.push({ kind: 'review_remediation', uri: this.#artifactUri(review, 'remediation-result.json'), metadata: { unresolved: remediation.result.unresolvedFindingIds.length } });
+		if (remediation) artifacts.push({ kind: 'review_remediation', uri: this.#artifactUri(review, 'remediation-result.json', paths), metadata: { unresolved: remediation.result.unresolvedFindingIds.length } });
 		if (evidence) artifacts.push(
-			{ kind: 'review_gate_results', uri: this.#artifactUri(review, 'gate-results.json'), metadata: { passed: evidence.gates.every(({ status: gateStatus }) => gateStatus === 'passed') } },
-			{ kind: 'review_draft_patch', uri: this.#artifactUri(review, 'draft.patch'), digest: evidence.diffSha256, metadata: { filesChanged: evidence.filesChanged, diffLines: evidence.diffLines } },
+			{ kind: 'review_gate_results', uri: this.#artifactUri(review, 'gate-results.json', paths), metadata: { passed: evidence.gates.every(({ status: gateStatus }) => gateStatus === 'passed') } },
+			{ kind: 'review_draft_patch', uri: this.#artifactUri(review, 'draft.patch', paths), digest: evidence.diffSha256, metadata: { filesChanged: evidence.filesChanged, diffLines: evidence.diffLines } },
 		);
 		if (final) artifacts.push(
-			{ kind: 'review_repository_context', uri: this.#artifactUri(review, 'repository-context-final'), metadata: { round: 'final', mode: 'read_only_repository', shell: false, network: false, mutation: false } },
-			{ kind: 'review_final', uri: this.#artifactUri(review, 'final-review.json'), metadata: { verdict: final.report.verdict, findings: final.report.findings.length } },
+			{ kind: 'review_repository_context', uri: this.#artifactUri(review, 'repository-context-final', paths), metadata: { round: 'final', mode: 'read_only_repository', shell: false, network: false, mutation: false } },
+			{ kind: 'review_final', uri: this.#artifactUri(review, 'final-review.json', paths), metadata: { verdict: final.report.verdict, findings: final.report.findings.length } },
 		);
 		return this.#ledger.completeReview(review, status, initial.report, final?.report, outcome, artifacts, principal);
 	}
 
-	#artifactUri(review: AuthorizedReview, suffix: string): string {
-		return `workspace://runs/${review.jobId}/${review.attemptNumber}-${review.attemptId}/evidence/reviews/${review.reviewNumber}-${review.reviewId}/${suffix}`;
+	#artifactUri(review: AuthorizedReview, suffix: string, paths?: ReviewPaths): string {
+		return `${paths?.artifactRootUri ?? `workspace://runs/${review.jobId}/${review.attemptNumber}-${review.attemptId}/evidence/reviews/${review.reviewNumber}-${review.reviewId}`}/${suffix}`;
 	}
 
 	async #git(cwd: string, args: string[], trim = true): Promise<string> {

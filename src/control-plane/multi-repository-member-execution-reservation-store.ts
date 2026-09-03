@@ -1,15 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import * as v from 'valibot';
 import { dataPath } from '../paths.ts';
-import { RepositoryContractSchema, RepositoryIdSchema, type RepositoryContract } from './contracts.ts';
-import type { Principal } from './ledger.ts';
+import { RepositoryContractSchema, RepositoryIdSchema, TriageDecisionSchema, WorkItemSchema, type RepositoryContract } from './contracts.ts';
+import type { ExecutionPaths } from './execution-service.ts';
+import { PreparationResultSchema, type PreparationResult } from './execution-contracts.ts';
+import type { AuthorizedExecution, Principal } from './ledger.ts';
 import { projectMultiRepositoryChangeSetReadiness } from './multi-repository-change-set-contracts.ts';
 import { ensureMultiRepositoryChangeSetSchema } from './multi-repository-change-set-schema.ts';
 import { MultiRepositoryChangeSetStore } from './multi-repository-change-set-store.ts';
-import { MultiRepositoryMemberPreparationLeaseStore } from './multi-repository-member-preparation-lease-store.ts';
+import {
+	MultiRepositoryMemberPreparationLeaseStore,
+	MultiRepositoryMemberPreparationResultSchema,
+} from './multi-repository-member-preparation-lease-store.ts';
 import {
 	MultiRepositoryMemberExecutionPreflightResultSchema,
 	type MultiRepositoryMemberExecutionPreflightResult,
@@ -27,7 +32,7 @@ export const MultiRepositoryMemberExecutionReservationSchema = v.object({
 	runId: v.pipe(v.string(), v.uuid()),
 	jobId: v.pipe(v.string(), v.uuid()),
 	ownerId: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
-	status: v.picklist(['reserved', 'running', 'blocked']),
+	status: v.picklist(['reserved', 'running', 'succeeded', 'blocked', 'failed']),
 	workerCalls: v.union([v.literal(0), v.literal(1)]),
 	attemptId: v.optional(v.pipe(v.string(), v.uuid())),
 	attemptNumber: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
@@ -56,6 +61,12 @@ const ReserveRequestSchema = v.object({
 
 export type MultiRepositoryMemberExecutionReservation = v.InferOutput<typeof MultiRepositoryMemberExecutionReservationSchema>;
 export interface MultiRepositoryMemberExecutionClaim { reservation: MultiRepositoryMemberExecutionReservation; newlyClaimed: boolean }
+export interface MultiRepositoryMemberClaimedExecution {
+	execution: AuthorizedExecution;
+	paths: ExecutionPaths;
+	baseCommit: string;
+	preparation: PreparationResult;
+}
 export class MultiRepositoryMemberExecutionReservationConflictError extends Error {}
 export class MultiRepositoryMemberExecutionReservationForbiddenError extends Error {}
 export class MultiRepositoryMemberExecutionReservationNotFoundError extends Error {}
@@ -190,6 +201,67 @@ export class MultiRepositoryMemberExecutionReservationStore {
 		return this.#record(row);
 	}
 
+	claimedExecution(id: string, principal: Principal, workspaceRoot: string): MultiRepositoryMemberClaimedExecution {
+		const reservation = this.get(id, principal);
+		if (reservation.status !== 'running' || reservation.workerCalls !== 1 || !reservation.attemptId || reservation.attemptNumber !== 1) {
+			throw new MultiRepositoryMemberExecutionReservationConflictError('Member execution has not claimed exactly one model dispatch');
+		}
+		const row = this.#db.prepare(`SELECT j.work_item_snapshot_json, j.triage_decision_json, p.result_json
+			FROM jobs j JOIN multi_repository_member_preparations p ON p.lease_id = ?
+			WHERE j.id = ? AND j.run_id = ?`).get(reservation.leaseId, reservation.jobId, reservation.runId) as
+			{ work_item_snapshot_json: string; triage_decision_json: string | null; result_json: string } | undefined;
+		if (!row) throw new MultiRepositoryMemberExecutionReservationConflictError('Claimed execution parentage is incomplete');
+		const prepared = v.parse(MultiRepositoryMemberPreparationResultSchema, JSON.parse(row.result_json));
+		if (!prepared.preparation || prepared.preparation.status !== 'passed') {
+			throw new MultiRepositoryMemberExecutionReservationConflictError('Claimed execution lacks passing preparation evidence');
+		}
+		return {
+			execution: {
+				runId: reservation.runId, jobId: reservation.jobId, attemptId: reservation.attemptId,
+				attemptNumber: reservation.attemptNumber, repository: reservation.policySnapshot,
+				workItem: v.parse(WorkItemSchema, JSON.parse(row.work_item_snapshot_json)),
+				triageDecision: row.triage_decision_json ? v.parse(TriageDecisionSchema, JSON.parse(row.triage_decision_json)) : undefined,
+			},
+			paths: {
+				attemptRoot: dirname(reservation.workspacePath), workspacePath: reservation.workspacePath,
+				evidencePath: reservation.evidencePath, sandboxHomePath: resolve(dirname(reservation.workspacePath), 'execution-home'),
+				toolDataPath: resolve(workspaceRoot, 'tool-cache', reservation.repositoryId.replace('/', '__'), 'mise'),
+				artifactRootUri: `workspace://multi-repository-change-sets/${reservation.changeSetId}/members/${reservation.leaseId}`,
+			},
+			baseCommit: reservation.baseCommit,
+			preparation: v.parse(PreparationResultSchema, prepared.preparation),
+		};
+	}
+
+	settle(id: string, principal: Principal): MultiRepositoryMemberExecutionReservation {
+		this.#db.transaction(() => {
+			const reservation = this.get(id, principal);
+			if (['succeeded', 'blocked', 'failed'].includes(reservation.status)) return false;
+			if (reservation.status !== 'running' || !reservation.attemptId) {
+				throw new MultiRepositoryMemberExecutionReservationConflictError('Only a claimed execution can be settled');
+			}
+			const state = this.#db.prepare(`SELECT a.status AS attempt_status, a.finished_at,
+				r.status AS run_status, j.status AS job_status
+				FROM attempts a JOIN jobs j ON j.id = a.job_id JOIN runs r ON r.id = j.run_id
+				WHERE a.id = ? AND j.id = ? AND r.id = ? AND r.owner_id = ?`).get(
+				reservation.attemptId, reservation.jobId, reservation.runId, principal.id,
+			) as { attempt_status: string; finished_at: string | null; run_status: string; job_status: string } | undefined;
+			if (!state || !['succeeded', 'blocked', 'failed'].includes(state.attempt_status)
+				|| state.run_status !== state.attempt_status || state.job_status !== state.attempt_status || !state.finished_at) {
+				throw new MultiRepositoryMemberExecutionReservationConflictError('Execution ledger has no matching terminal outcome');
+			}
+			const changed = this.#db.prepare(`UPDATE multi_repository_member_execution_reservations
+				SET status = ?, finished_at = ? WHERE id = ? AND owner_id = ? AND status = 'running' AND worker_calls = 1`)
+				.run(state.attempt_status, state.finished_at, id, principal.id);
+			if (changed.changes !== 1) throw new MultiRepositoryMemberExecutionReservationConflictError('Execution settlement raced with another process');
+			const leaseChanged = this.#db.prepare("UPDATE multi_repository_member_preparation_leases SET status = 'consumed' WHERE id = ? AND owner_id = ? AND status = 'prepared'")
+				.run(reservation.leaseId, principal.id);
+			if (leaseChanged.changes !== 1) throw new MultiRepositoryMemberExecutionReservationConflictError('Prepared workspace consumption raced with another process');
+			return true;
+		}).immediate();
+		return this.get(id, principal);
+	}
+
 	recordPreflightAndClaim(
 		id: string,
 		principal: Principal,
@@ -281,28 +353,45 @@ export class MultiRepositoryMemberExecutionReservationStore {
 			WHERE r.id = ? AND j.id = ? AND r.owner_id = ?`).get(
 			row.attempt_id, row.run_id, row.job_id, row.owner_id,
 		) as { run_status: string; job_status: string; current_attempt: number; attempt_id: string | null; attempt_number: number | null; attempt_status: string | null; attempt_started_at: string | null } | undefined;
+		const terminal = ['succeeded', 'blocked', 'failed'].includes(row.status) && row.worker_calls === 1;
+		const claimedLedgerValid = row.worker_calls === 1 && Boolean(row.attempt_id) && row.attempt_number === 1 && Boolean(row.started_at)
+			&& preflight?.status === 'passed' && ledgerState?.current_attempt === 1
+			&& ledgerState.attempt_id === row.attempt_id && ledgerState.attempt_number === row.attempt_number
+			&& ledgerState.attempt_started_at === row.started_at;
 		const lifecycleValid = row.status === 'reserved'
 			? row.worker_calls === 0 && !row.attempt_id && !row.attempt_number && !row.started_at && !row.finished_at && !preflight
 				&& ledgerState?.run_status === 'blocked' && ledgerState.job_status === 'blocked' && ledgerState.current_attempt === 0
 			: row.status === 'running'
-				? row.worker_calls === 1 && Boolean(row.attempt_id) && row.attempt_number === 1 && Boolean(row.started_at) && !row.finished_at
-					&& preflight?.status === 'passed'
-					&& ledgerState?.run_status === 'active' && ledgerState.job_status === 'running' && ledgerState.current_attempt === 1
-					&& ledgerState.attempt_id === row.attempt_id && ledgerState.attempt_number === row.attempt_number
-					&& ledgerState.attempt_status === 'running' && ledgerState.attempt_started_at === row.started_at
-				: row.status === 'blocked' && row.worker_calls === 0 && !row.attempt_id && !row.attempt_number && !row.started_at
+				? claimedLedgerValid && !row.finished_at && (
+					(ledgerState?.run_status === 'active' && ledgerState.job_status === 'running' && ledgerState.attempt_status === 'running')
+					|| (['succeeded', 'blocked', 'failed'].includes(ledgerState?.attempt_status ?? '')
+						&& ledgerState?.run_status === ledgerState.attempt_status && ledgerState.job_status === ledgerState.attempt_status)
+				)
+				: terminal
+					? claimedLedgerValid && Boolean(row.finished_at) && ledgerState?.attempt_status === row.status
+						&& ledgerState.run_status === row.status && ledgerState.job_status === row.status
+					: row.status === 'blocked' && row.worker_calls === 0 && !row.attempt_id && !row.attempt_number && !row.started_at
 					&& Boolean(row.finished_at) && preflight?.status === 'blocked'
 					&& ledgerState?.run_status === 'blocked' && ledgerState.job_status === 'blocked' && ledgerState.current_attempt === 0;
-		if (!lifecycleValid || lease.status !== 'prepared' || !preparation
-			|| row.schedule_id !== lease.scheduleId || row.change_set_id !== lease.changeSetId || row.repository_id !== lease.repositoryId
-			|| row.run_id !== lease.runId || row.job_id !== lease.jobId || digest(preparation) !== row.preparation_result_sha256
-			|| digest(policySnapshot) !== row.policy_snapshot_sha256 || row.policy_snapshot_sha256 !== lease.policySnapshotSha256
-			|| row.base_commit !== preparation.baseCommit || row.workspace_path !== preparation.workspacePath || row.evidence_path !== preparation.evidencePath
-			|| (preflightRow && digest(preflight) !== preflightRow.result_sha256)
-			|| (preflight && (preflight.reservationId !== row.id
-				|| (preflight.status === 'passed' && (preflight.inspection?.headCommit !== row.base_commit || preflight.inspection.dirtyPaths.length !== 0))))
-			|| digest({ leaseId: row.lease_id, reason: row.reason }) !== row.request_sha256) {
-			throw new MultiRepositoryMemberExecutionReservationConflictError('Stored execution reservation failed preparation, policy, or request integrity verification');
+		const expectedLeaseStatus = terminal ? 'consumed' : 'prepared';
+		if (!lifecycleValid) {
+			throw new MultiRepositoryMemberExecutionReservationConflictError(`Stored execution reservation failed lifecycle verification: ${row.status}/${ledgerState?.run_status ?? 'missing'}/${ledgerState?.job_status ?? 'missing'}/${ledgerState?.attempt_status ?? 'missing'}`);
+		}
+		const integrityFailures = [
+			lease.status !== expectedLeaseStatus && 'lease_status', !preparation && 'preparation_missing',
+			row.schedule_id !== lease.scheduleId && 'schedule', row.change_set_id !== lease.changeSetId && 'change_set',
+			row.repository_id !== lease.repositoryId && 'repository', row.run_id !== lease.runId && 'run', row.job_id !== lease.jobId && 'job',
+			preparation && digest(preparation) !== row.preparation_result_sha256 && 'preparation_digest',
+			digest(policySnapshot) !== row.policy_snapshot_sha256 && 'policy_digest', row.policy_snapshot_sha256 !== lease.policySnapshotSha256 && 'lease_policy',
+			preparation && row.base_commit !== preparation.baseCommit && 'base_commit', preparation && row.workspace_path !== preparation.workspacePath && 'workspace',
+			preparation && row.evidence_path !== preparation.evidencePath && 'evidence',
+			preflightRow && digest(preflight) !== preflightRow.result_sha256 && 'preflight_digest',
+			preflight && preflight.reservationId !== row.id && 'preflight_reservation',
+			preflight?.status === 'passed' && (preflight.inspection?.headCommit !== row.base_commit || preflight.inspection.dirtyPaths.length !== 0) && 'preflight_inspection',
+			digest({ leaseId: row.lease_id, reason: row.reason }) !== row.request_sha256 && 'request_digest',
+		].filter(Boolean);
+		if (integrityFailures.length > 0) {
+			throw new MultiRepositoryMemberExecutionReservationConflictError(`Stored execution reservation failed integrity verification: ${integrityFailures.join(', ')}`);
 		}
 		return v.parse(MultiRepositoryMemberExecutionReservationSchema, {
 			id: row.id, leaseId: row.lease_id, scheduleId: row.schedule_id, changeSetId: row.change_set_id,

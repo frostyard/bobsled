@@ -86,6 +86,7 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (30, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (31, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (32, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (33, datetime('now'));
 	`);
 	const leaseColumns = new Set((db.prepare('PRAGMA table_info(multi_repository_member_preparation_leases)').all() as Array<{ name: string }>).map(({ name }) => name));
 	if (!leaseColumns.has('started_at')) db.exec('ALTER TABLE multi_repository_member_preparation_leases ADD COLUMN started_at TEXT');

@@ -6,9 +6,11 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import type { RepositoryContract } from '../src/control-plane/contracts.ts';
+import { ExecutionService } from '../src/control-plane/execution-service.ts';
 import { JobLedger } from '../src/control-plane/ledger.ts';
 import { MultiRepositoryChangeSetAuthorizationStore } from '../src/control-plane/multi-repository-change-set-authorization-store.ts';
 import { MultiRepositoryMemberExecutionPreflightService } from '../src/control-plane/multi-repository-member-execution-preflight-service.ts';
+import { MultiRepositoryMemberExecutionService } from '../src/control-plane/multi-repository-member-execution-service.ts';
 import {
 	MultiRepositoryMemberExecutionReservationConflictError,
 	MultiRepositoryMemberExecutionReservationForbiddenError,
@@ -56,7 +58,9 @@ function fixture(policy = coordinatedRepositories()) {
 	const root = mkdtempSync(join(tmpdir(), 'bobsled-multi-repository-execution-reservation-'));
 	const path = join(root, 'bobsled.db');
 	const workspacePath = join(root, 'workspaces', 'prepared', 'repo');
+	const evidencePath = join(root, 'workspaces', 'prepared', 'evidence');
 	mkdirSync(workspacePath, { recursive: true });
+	mkdirSync(evidencePath, { recursive: true });
 	git(workspacePath, ['init', '-b', 'main']);
 	writeFileSync(join(workspacePath, 'tracked.txt'), 'clean\n');
 	git(workspacePath, ['add', 'tracked.txt']);
@@ -76,7 +80,7 @@ function fixture(policy = coordinatedRepositories()) {
 	assert.equal(leases.claimPreparation(lease.id, principal).newlyClaimed, true);
 	const prepared = leases.completePreparation(lease.id, principal, {
 		leaseId: lease.id, repositoryId: lease.repositoryId,
-		workspacePath, evidencePath: join(root, 'workspaces', 'prepared', 'evidence'),
+		workspacePath, evidencePath,
 		baseCommit, headCommit: baseCommit,
 		preparation: { name: lease.policySnapshot.workspacePreparation.name, command: lease.policySnapshot.workspacePreparation.command,
 			networkAccess: lease.policySnapshot.workspacePreparation.networkAccess, status: 'passed', exitCode: 0,
@@ -185,6 +189,101 @@ test('preflights the prepared workspace and atomically claims one ledger attempt
 		assert.equal(run.approvals.filter(({ kind }) => kind === 'multi_repository_execution').length, 1);
 		assert.equal(run.audit.filter(({ type }) => type === 'multi_repository.execution_started').length, 1);
 	} finally { ledger.close(); rmSync(value.root, { recursive: true, force: true }); }
+});
+
+test('reconstructs the claimed worker context and atomically consumes terminal member execution', async () => {
+	const value = fixture();
+	const store = new MultiRepositoryMemberExecutionReservationStore(value.path, now, value.policy);
+	const reservation = store.reserve({ leaseId: value.prepared.id, reason: 'Execute this prepared member through its immutable policy snapshot.' }, principal, 'reservation');
+	const claim = await new MultiRepositoryMemberExecutionPreflightService(store).run(reservation.id, principal.id);
+	assert.equal(claim.newlyClaimed, true);
+	const context = store.claimedExecution(reservation.id, principal, join(value.root, 'workspaces'));
+	assert.equal(context.execution.attemptId, claim.reservation.attemptId);
+	assert.equal(context.execution.repository.id, value.prepared.repositoryId);
+	assert.equal(context.baseCommit, value.baseCommit);
+	assert.equal(context.preparation.status, 'passed');
+	assert.match(context.paths.artifactRootUri, new RegExp(value.prepared.changeSetId));
+
+	const ledger = new JobLedger(value.path, now);
+	try {
+		ledger.completeExecution(context.execution, 'succeeded', { evidence: { filesChanged: 0 } }, [], principal);
+		const settled = store.settle(reservation.id, principal);
+		assert.equal(settled.status, 'succeeded');
+		assert.equal(settled.workerCalls, 1);
+		assert.ok(settled.finishedAt);
+		assert.equal(store.settle(reservation.id, principal).status, 'succeeded');
+	} finally { ledger.close(); store.close(); }
+	const db = new Database(value.path);
+	try {
+		assert.equal((db.prepare('SELECT status FROM multi_repository_member_preparation_leases WHERE id = ?').get(value.prepared.id) as { status: string }).status, 'consumed');
+		assert.equal((db.prepare('SELECT version FROM schema_migrations WHERE version = 33').get() as { version: number }).version, 33);
+	} finally { db.close(); rmSync(value.root, { recursive: true, force: true }); }
+});
+
+test('orchestrates exactly one claimed worker call and converges terminal replays', async () => {
+	const value = fixture();
+	const store = new MultiRepositoryMemberExecutionReservationStore(value.path, now, value.policy);
+	const reservation = store.reserve({ leaseId: value.prepared.id, reason: 'Run one prepared member worker and preserve replay safety.' }, principal, 'reservation');
+	const ledger = new JobLedger(value.path, now);
+	let workerCalls = 0;
+	let reviewCalls = 0;
+	const service = new MultiRepositoryMemberExecutionService({
+		store, ledger, workspaceRoot: join(value.root, 'workspaces'),
+		execution: {
+			executeClaimed: async (execution, paths, baseCommit, preparation, actor) => {
+				workerCalls += 1;
+				assert.equal(paths.workspacePath, value.workspacePath);
+				assert.equal(baseCommit, value.baseCommit);
+				assert.equal(preparation.status, 'passed');
+				return ledger.completeExecution(execution, 'succeeded', {
+					preparation, worker: { result: { disposition: 'no_change' } }, evidence: { filesChanged: 0 },
+				}, [], actor);
+			},
+		},
+		review: { reviewAutomatically: async () => { reviewCalls += 1; throw new Error('No-change work is not reviewable'); } },
+	});
+	try {
+		const first = await service.run(reservation.id, principal.id);
+		assert.equal(first.status, 'succeeded');
+		assert.equal((await service.run(reservation.id, principal.id)).status, 'succeeded');
+		assert.equal(workerCalls, 1);
+		assert.equal(reviewCalls, 0);
+		assert.equal(store.get(reservation.id, principal).status, 'succeeded');
+	} finally { ledger.close(); store.close(); rmSync(value.root, { recursive: true, force: true }); }
+});
+
+test('runs a prepared member through the native worker evidence and gate pipeline once', async () => {
+	const policy = coordinatedRepositories().map((repository) => repository.id === 'frostyard/clix' ? {
+		...repository, qualityGates: [],
+		executionPolicy: { ...repository.executionPolicy, requiredGateIds: [] },
+		reviewPolicy: { ...repository.reviewPolicy, enabled: false },
+	} : repository);
+	const value = fixture(policy);
+	const store = new MultiRepositoryMemberExecutionReservationStore(value.path, now, value.policy);
+	const reservation = store.reserve({ leaseId: value.prepared.id, reason: 'Run one real prepared member through trusted postconditions.' }, principal, 'reservation');
+	const ledger = new JobLedger(value.path, now);
+	let workerCalls = 0;
+	const execution = new ExecutionService({
+		ledger, workspaceRoot: join(value.root, 'workspaces'),
+		worker: async (input) => {
+			workerCalls += 1;
+			writeFileSync(join(input.workspacePath, 'tracked.txt'), 'implemented\n');
+			return {
+				conversationId: 'member-worker', submissionId: 'member-worker-submission',
+				plan: { summary: 'Update the member.', tasks: [{ id: 'implementation', objective: 'Update tracked.txt.', expectedPaths: ['tracked.txt'], acceptanceCriteria: ['The member is updated.'] }], assumptions: [], risks: [] },
+				result: { disposition: 'changed', summary: 'Updated the member.', changedPaths: ['tracked.txt'], testsRun: [], notes: [] }, text: 'Done.',
+			};
+		},
+	});
+	const service = new MultiRepositoryMemberExecutionService({ store, ledger, execution, workspaceRoot: join(value.root, 'workspaces') });
+	try {
+		const completed = await service.run(reservation.id, principal.id);
+		assert.equal(completed.status, 'succeeded');
+		assert.equal(workerCalls, 1);
+		assert.equal(completed.jobs[0]?.artifacts.some(({ kind, uri }) => kind === 'draft_patch' && uri.includes(value.prepared.changeSetId)), true);
+		assert.equal((await service.run(reservation.id, principal.id)).status, 'succeeded');
+		assert.equal(workerCalls, 1);
+	} finally { ledger.close(); store.close(); rmSync(value.root, { recursive: true, force: true }); }
 });
 
 test('blocks a dirty or unreadable prepared workspace with zero attempts and zero model calls', async () => {

@@ -35,12 +35,13 @@ interface CommandResult {
 	truncated: boolean;
 }
 
-interface ExecutionPaths {
+export interface ExecutionPaths {
 	attemptRoot: string;
 	workspacePath: string;
 	evidencePath: string;
 	sandboxHomePath: string;
 	toolDataPath: string;
+	artifactRootUri: string;
 }
 
 export interface ExecutionServiceOptions {
@@ -170,43 +171,72 @@ export class ExecutionService {
 			if (preparation.status !== 'passed') {
 				return this.#ledger.completeExecution(execution, 'failed', { preparation }, [{
 					kind: 'workspace_preparation',
-					uri: this.#artifactUri(execution, 'evidence/workspace-preparation.json'),
+					uri: `${paths.artifactRootUri}/evidence/workspace-preparation.json`,
 					metadata: { status: preparation.status, command: preparation.command },
 				}], principal);
 			}
-			const worker = await this.#worker({
-				runId: execution.runId,
-				jobId: execution.jobId,
-				attemptId: execution.attemptId,
-				workspacePath: paths.workspacePath,
-				sandboxHomePath: paths.sandboxHomePath,
-				toolDataPath: paths.toolDataPath,
-				executablePath: this.#executablePath,
-				baseCommit,
-				repository: execution.repository,
-				workItem: execution.workItem,
-			}, execution.repository.executionPolicy.workerTimeoutMinutes * 60_000);
-			await writeFile(resolve(paths.evidencePath, 'implementation-plan.json'), `${JSON.stringify(worker.plan, null, 2)}\n`, { mode: 0o600 });
-			await writeFile(resolve(paths.evidencePath, 'worker-result.json'), `${JSON.stringify(worker, null, 2)}\n`, { mode: 0o600 });
-
-			const gates = await this.#runGates(execution, paths);
-			const evidence = await this.#collectEvidence(execution, paths, baseCommit, gates, worker.result.disposition);
-			const status = evidence.policyViolations.length === 0 && gates.every(({ status }) => status === 'passed')
-				? 'succeeded' as const
-				: 'blocked' as const;
-			return this.#ledger.completeExecution(execution, status, { preparation, worker, evidence }, this.#artifacts(execution, paths, evidence), principal);
+			return await this.#executeClaimed(execution, paths, baseCommit, preparation, principal);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : 'Execution failed';
-			const evidencePath = paths?.evidencePath ?? resolve(this.#workspaceRoot, 'runs', execution.jobId, `${execution.attemptNumber}-${execution.attemptId}`, 'evidence');
-			await mkdir(evidencePath, { recursive: true, mode: 0o700 });
-			const errorPath = resolve(evidencePath, 'execution-error.json');
-			await writeFile(errorPath, `${JSON.stringify({ error: message }, null, 2)}\n`, { mode: 0o600 });
-			return this.#ledger.completeExecution(execution, 'failed', { error: message }, [{
-				kind: 'execution_error',
-				uri: this.#artifactUri(execution, 'evidence/execution-error.json'),
-				metadata: { message },
-			}], principal);
+			return await this.#fail(execution, paths, error, principal);
 		}
+	}
+
+	async executeClaimed(
+		execution: AuthorizedExecution,
+		paths: ExecutionPaths,
+		baseCommit: string,
+		preparation: PreparationResult,
+		principal: Principal,
+	): Promise<RunRecord> {
+		try {
+			if (preparation.status !== 'passed') throw new Error('Claimed execution requires passing workspace preparation evidence');
+			await this.#validateClaimedPaths(paths, baseCommit);
+			return await this.#executeClaimed(execution, paths, baseCommit, preparation, principal);
+		} catch (error) {
+			return await this.#fail(execution, paths, error, principal);
+		}
+	}
+
+	async #executeClaimed(
+		execution: AuthorizedExecution,
+		paths: ExecutionPaths,
+		baseCommit: string,
+		preparation: PreparationResult,
+		principal: Principal,
+	): Promise<RunRecord> {
+		const worker = await this.#worker({
+			runId: execution.runId,
+			jobId: execution.jobId,
+			attemptId: execution.attemptId,
+			workspacePath: paths.workspacePath,
+			sandboxHomePath: paths.sandboxHomePath,
+			toolDataPath: paths.toolDataPath,
+			executablePath: this.#executablePath,
+			baseCommit,
+			repository: execution.repository,
+			workItem: execution.workItem,
+		}, execution.repository.executionPolicy.workerTimeoutMinutes * 60_000);
+		await writeFile(resolve(paths.evidencePath, 'implementation-plan.json'), `${JSON.stringify(worker.plan, null, 2)}\n`, { mode: 0o600 });
+		await writeFile(resolve(paths.evidencePath, 'worker-result.json'), `${JSON.stringify(worker, null, 2)}\n`, { mode: 0o600 });
+
+		const gates = await this.#runGates(execution, paths);
+		const evidence = await this.#collectEvidence(execution, paths, baseCommit, gates, worker.result.disposition);
+		const status = evidence.policyViolations.length === 0 && gates.every(({ status }) => status === 'passed')
+			? 'succeeded' as const
+			: 'blocked' as const;
+		return this.#ledger.completeExecution(execution, status, { preparation, worker, evidence }, this.#artifacts(execution, paths, evidence), principal);
+	}
+
+	async #fail(execution: AuthorizedExecution, paths: ExecutionPaths | undefined, error: unknown, principal: Principal): Promise<RunRecord> {
+		const message = error instanceof Error ? error.message : 'Execution failed';
+		const evidencePath = paths?.evidencePath ?? resolve(this.#workspaceRoot, 'runs', execution.jobId, `${execution.attemptNumber}-${execution.attemptId}`, 'evidence');
+		await mkdir(evidencePath, { recursive: true, mode: 0o700 });
+		await writeFile(resolve(evidencePath, 'execution-error.json'), `${JSON.stringify({ error: message }, null, 2)}\n`, { mode: 0o600 });
+		return this.#ledger.completeExecution(execution, 'failed', { error: message }, [{
+			kind: 'execution_error',
+			uri: `${paths?.artifactRootUri ?? this.#artifactRootUri(execution)}/evidence/execution-error.json`,
+			metadata: { message },
+		}], principal);
 	}
 
 	async #createWorkspace(execution: AuthorizedExecution): Promise<ExecutionPaths> {
@@ -238,7 +268,23 @@ export class ExecutionService {
 			env: cleanEnvironment(sandboxHomePath, toolDataPath, this.#executablePath),
 		});
 		if (added.exitCode !== 0) throw new Error(`Unable to create isolated Git worktree: ${added.stderr.trim() || added.stdout.trim()}`);
-		return { attemptRoot, workspacePath, evidencePath, sandboxHomePath, toolDataPath };
+		return { attemptRoot, workspacePath, evidencePath, sandboxHomePath, toolDataPath, artifactRootUri: this.#artifactRootUri(execution) };
+	}
+
+	async #validateClaimedPaths(paths: ExecutionPaths, baseCommit: string): Promise<void> {
+		const root = await realpath(this.#workspaceRoot).catch(() => undefined);
+		const workspace = await realpath(paths.workspacePath).catch(() => undefined);
+		const evidence = await realpath(paths.evidencePath).catch(() => undefined);
+		if (!root || !workspace || !evidence || !workspace.startsWith(`${root}/`) || !evidence.startsWith(`${root}/`)) {
+			throw new Error('Claimed execution paths escape the trusted workspace root');
+		}
+		if (await this.#git(workspace, ['rev-parse', '--show-toplevel']) !== workspace) throw new Error('Claimed execution workspace is not its Git worktree root');
+		if (await this.#git(workspace, ['rev-parse', 'HEAD']) !== baseCommit) throw new Error('Claimed execution workspace moved from its reserved base commit');
+		if ((await this.#git(workspace, ['status', '--porcelain=v1', '-z'], false)).length > 0) {
+			throw new Error('Claimed execution workspace changed after its trusted preflight');
+		}
+		await mkdir(resolve(paths.sandboxHomePath, 'tmp'), { recursive: true, mode: 0o700 });
+		await mkdir(resolve(paths.toolDataPath, 'cache'), { recursive: true, mode: 0o700 });
 	}
 
 	async #prepareWorkspace(execution: AuthorizedExecution, paths: ExecutionPaths): Promise<PreparationResult> {
@@ -348,17 +394,17 @@ export class ExecutionService {
 
 	#artifacts(execution: AuthorizedExecution, paths: ExecutionPaths, evidence: DraftPatchEvidence) {
 		return [
-			{ kind: 'workspace_preparation', uri: this.#artifactUri(execution, 'evidence/workspace-preparation.json'), metadata: {} },
-			{ kind: 'implementation_plan', uri: this.#artifactUri(execution, 'evidence/implementation-plan.json'), metadata: {} },
-			{ kind: 'worker_result', uri: this.#artifactUri(execution, 'evidence/worker-result.json'), metadata: {} },
-			{ kind: 'gate_results', uri: this.#artifactUri(execution, 'evidence/gate-results.json'), metadata: { passed: evidence.gates.every(({ status }) => status === 'passed') } },
-			{ kind: 'draft_patch', uri: this.#artifactUri(execution, 'evidence/draft.patch'), digest: evidence.diffSha256, metadata: { filesChanged: evidence.filesChanged, diffLines: evidence.diffLines } },
-			{ kind: 'execution_summary', uri: this.#artifactUri(execution, 'evidence/summary.json'), metadata: { policyViolations: evidence.policyViolations } },
+			{ kind: 'workspace_preparation', uri: `${paths.artifactRootUri}/evidence/workspace-preparation.json`, metadata: {} },
+			{ kind: 'implementation_plan', uri: `${paths.artifactRootUri}/evidence/implementation-plan.json`, metadata: {} },
+			{ kind: 'worker_result', uri: `${paths.artifactRootUri}/evidence/worker-result.json`, metadata: {} },
+			{ kind: 'gate_results', uri: `${paths.artifactRootUri}/evidence/gate-results.json`, metadata: { passed: evidence.gates.every(({ status }) => status === 'passed') } },
+			{ kind: 'draft_patch', uri: `${paths.artifactRootUri}/evidence/draft.patch`, digest: evidence.diffSha256, metadata: { filesChanged: evidence.filesChanged, diffLines: evidence.diffLines } },
+			{ kind: 'execution_summary', uri: `${paths.artifactRootUri}/evidence/summary.json`, metadata: { policyViolations: evidence.policyViolations } },
 		];
 	}
 
-	#artifactUri(execution: AuthorizedExecution, suffix: string): string {
-		return `workspace://runs/${execution.jobId}/${execution.attemptNumber}-${execution.attemptId}/${suffix}`;
+	#artifactRootUri(execution: AuthorizedExecution): string {
+		return `workspace://runs/${execution.jobId}/${execution.attemptNumber}-${execution.attemptId}`;
 	}
 
 	async #git(cwd: string, args: string[], trim = true): Promise<string> {
