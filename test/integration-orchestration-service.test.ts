@@ -9,6 +9,7 @@ import { IntegrationGateService } from '../src/control-plane/integration-gate-se
 import { IntegrationInvocationStore } from '../src/control-plane/integration-invocation-store.ts';
 import { IntegrationOrchestrationService } from '../src/control-plane/integration-orchestration-service.ts';
 import { IntegrationPreflightService } from '../src/control-plane/integration-preflight-service.ts';
+import { IntegrationPreparationService } from '../src/control-plane/integration-preparation-service.ts';
 import { JobLedger } from '../src/control-plane/ledger.ts';
 import { MultiWorkerParentStore } from '../src/control-plane/multi-worker-parent-store.ts';
 
@@ -76,11 +77,20 @@ function passingGates(store: IntegrationInvocationStore, calls: string[] = []) {
 	});
 }
 
+function passingPreparation(store: IntegrationInvocationStore, calls: string[] = []) {
+	return new IntegrationPreparationService(store, { runner: async (command) => {
+		calls.push(command);
+		return { status: 'passed', exitCode: 0, durationMs: 1, stdout: 'prepared', stderr: '', truncated: false };
+	} });
+}
+
 test('orchestrates one native worker receipt through trusted inspection and gates', async () => {
 	const value = fixture();
 	let workerCalls = 0;
 	const gateCalls: string[] = [];
+	const preparationCalls: string[] = [];
 	const service = new IntegrationOrchestrationService(value.store, {
+		preparation: passingPreparation(value.store, preparationCalls),
 		gates: passingGates(value.store, gateCalls),
 		worker: async (input, timeoutMs) => {
 			workerCalls += 1;
@@ -104,9 +114,55 @@ test('orchestrates one native worker receipt through trusted inspection and gate
 		assert.equal(settled.outcome?.status, 'succeeded');
 		assert.deepEqual(settled.outcome?.workerChangedPaths, ['src/integration/result.ts']);
 		assert.deepEqual(gateCalls, ['node scripts/check-docs.mjs', 'make verify']);
+		assert.deepEqual(preparationCalls, ['mise install']);
+		assert.equal(settled.preparation?.result.status, 'passed');
+		assert.equal(settled.finalIntegrity?.result.status, 'passed');
 		assert.equal(workerCalls, 1);
 		assert.equal((await service.execute(value.integrationAttemptId, ownerId)).status, 'succeeded');
 		assert.equal(workerCalls, 1);
+	} finally { value.store.close(); }
+});
+
+test('failed repository preparation is durable and prevents preflight and worker token spend', async () => {
+	const value = fixture();
+	let workerCalls = 0;
+	const service = new IntegrationOrchestrationService(value.store, {
+		preparation: new IntegrationPreparationService(value.store, { runner: async () => ({
+			status: 'failed', exitCode: 1, durationMs: 4, stdout: '', stderr: 'mise failed', truncated: false,
+		}) }),
+		worker: async () => { workerCalls += 1; throw new Error('must not run'); },
+	});
+	try {
+		const settled = await service.execute(value.integrationAttemptId, ownerId);
+		assert.equal(settled.status, 'blocked');
+		assert.equal(settled.workerCalls, 0);
+		assert.equal(settled.preparation?.result.status, 'failed');
+		assert.match(settled.preparation?.result.stderr ?? '', /mise failed/);
+		assert.equal(settled.preflight, undefined);
+		assert.equal(workerCalls, 0);
+		assert.equal((await service.execute(value.integrationAttemptId, ownerId)).status, 'blocked');
+		assert.equal(workerCalls, 0);
+	} finally { value.store.close(); }
+});
+
+test('an expired ambiguous preparation is blocked without rerunning its command', async () => {
+	const value = fixture();
+	value.store.claimPreparation(value.integrationAttemptId, ownerId);
+	let preparationCalls = 0;
+	const preparation = new IntegrationPreparationService(value.store, {
+		runner: async () => {
+			preparationCalls += 1;
+			return { status: 'passed', exitCode: 0, durationMs: 1, stdout: '', stderr: '', truncated: false };
+		},
+		now: () => new Date(Date.now() + 17 * 60_000),
+	});
+	const service = new IntegrationOrchestrationService(value.store, { preparation });
+	try {
+		const settled = await service.execute(value.integrationAttemptId, ownerId);
+		assert.equal(settled.status, 'blocked');
+		assert.equal(settled.workerCalls, 0);
+		assert.equal(preparationCalls, 0);
+		assert.match(settled.preparation?.result.stderr ?? '', /expired ambiguous command/);
 	} finally { value.store.close(); }
 });
 
@@ -114,6 +170,7 @@ test('blocks policy-denied integration before preflight or token spend', async (
 	const value = fixture('frostyard/bobsled');
 	let workerCalls = 0;
 	const service = new IntegrationOrchestrationService(value.store, {
+		preparation: passingPreparation(value.store),
 		worker: async () => { workerCalls += 1; throw new Error('must not run'); },
 	});
 	try {
@@ -129,6 +186,7 @@ test('records worker failure and never retries an ambiguous claimed invocation',
 	const failed = fixture();
 	let failedCalls = 0;
 	const failing = new IntegrationOrchestrationService(failed.store, {
+		preparation: passingPreparation(failed.store),
 		worker: async () => { failedCalls += 1; throw new Error('worker unavailable'); },
 	});
 	try {
@@ -141,15 +199,18 @@ test('records worker failure and never retries an ambiguous claimed invocation',
 	} finally { failed.store.close(); }
 
 	const ambiguous = fixture();
+	await passingPreparation(ambiguous.store).run(ambiguous.integrationAttemptId, ownerId);
 	await new IntegrationPreflightService(ambiguous.store).run(ambiguous.integrationAttemptId, ownerId);
 	let retryCalls = 0;
 	const inFlight = new IntegrationOrchestrationService(ambiguous.store, {
+		preparation: passingPreparation(ambiguous.store),
 		worker: async () => { retryCalls += 1; throw new Error('must not retry'); },
 	});
 	try {
 		assert.equal((await inFlight.execute(ambiguous.integrationAttemptId, ownerId)).status, 'running');
 		assert.equal(retryCalls, 0);
 		const recovery = new IntegrationOrchestrationService(ambiguous.store, {
+			preparation: passingPreparation(ambiguous.store),
 			worker: async () => { retryCalls += 1; throw new Error('must not retry'); },
 			now: () => new Date(Date.now() + 22 * 60_000),
 		});
@@ -164,6 +225,7 @@ test('blocks a worker scope escape before running repository gates', async () =>
 	const value = fixture();
 	const gateCalls: string[] = [];
 	const service = new IntegrationOrchestrationService(value.store, {
+		preparation: passingPreparation(value.store),
 		gates: passingGates(value.store, gateCalls),
 		worker: async (input) => {
 			writeFileSync(join(input.workspacePath, 'outside.ts'), 'export const escaped = true;\n');
@@ -179,5 +241,34 @@ test('blocks a worker scope escape before running repository gates', async () =>
 		assert.equal(settled.status, 'blocked');
 		assert.ok(settled.outcome?.violations.includes('scope_violation'));
 		assert.deepEqual(gateCalls, []);
+	} finally { value.store.close(); }
+});
+
+test('blocks terminal success when a declared non-mutating gate changes the final patch', async () => {
+	const value = fixture();
+	let gateCalls = 0;
+	const gates = new IntegrationGateService(value.store, async (_command, context) => {
+		gateCalls += 1;
+		if (gateCalls === 1) writeFileSync(join(context.workspacePath, 'src', 'integration', 'result.ts'), 'export const integrated = false;\n');
+		return { status: 'passed', exitCode: 0, durationMs: 1, stdout: 'ok', stderr: '', truncated: false };
+	});
+	const service = new IntegrationOrchestrationService(value.store, {
+		preparation: passingPreparation(value.store), gates,
+		worker: async (input) => {
+			writeFileSync(join(input.workspacePath, 'src', 'integration', 'result.ts'), 'export const integrated = true;\n');
+			return {
+				conversationId: 'integration-conversation', submissionId: 'integration-submission',
+				result: { disposition: 'changed', summary: 'Integrated API.', changedPaths: ['src/integration/result.ts'], testsRun: [], notes: [] },
+				text: 'Integrated API.',
+			};
+		},
+	});
+	try {
+		const settled = await service.execute(value.integrationAttemptId, ownerId);
+		assert.equal(settled.status, 'blocked');
+		assert.equal(gateCalls, 2);
+		assert.deepEqual(settled.gateResults?.map(({ status }) => status), ['passed', 'passed']);
+		assert.equal(settled.finalIntegrity?.result.status, 'blocked');
+		assert.deepEqual(settled.finalIntegrity?.result.violations, ['final_patch_changed']);
 	} finally { value.store.close(); }
 });

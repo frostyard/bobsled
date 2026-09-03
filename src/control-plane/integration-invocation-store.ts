@@ -16,7 +16,12 @@ import {
 	type MultiWorkerPlanV2,
 } from './work-plan-contracts.ts';
 import { ensureMultiWorkerParentSchema } from './multi-worker-parent-store.ts';
-import { GateResultSchema, type GateResult } from './execution-contracts.ts';
+import {
+	GateResultSchema,
+	PreparationResultSchema,
+	type GateResult,
+	type PreparationResult,
+} from './execution-contracts.ts';
 import {
 	RepositoryContractSchema,
 	WorkItemSchema,
@@ -28,6 +33,11 @@ import {
 	IntegrationPreflightResultSchema,
 	type IntegrationPreflightResult,
 } from './integration-preflight-contracts.ts';
+import {
+	evaluateIntegrationFinalIntegrity,
+	IntegrationFinalIntegrityResultSchema,
+	type IntegrationFinalIntegrityResult,
+} from './integration-final-integrity.ts';
 
 const ReservationSchema = v.object({
 	integrationAttemptId: v.pipe(v.string(), v.uuid()),
@@ -39,13 +49,21 @@ const ReservationSchema = v.object({
 export const IntegrationInvocationLeaseSchema = v.object({
 	...ReservationSchema.entries,
 	ownerId: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
-	status: v.picklist(['reserved', 'running', 'awaiting_gates', 'succeeded', 'blocked', 'failed']),
+	status: v.picklist(['reserved', 'preparing', 'running', 'awaiting_gates', 'succeeded', 'blocked', 'failed']),
 	workerCalls: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(1)),
 	createdAt: v.string(),
 	startedAt: v.optional(v.string()),
 	finishedAt: v.optional(v.string()),
 	outcome: v.optional(IntegrationWorkerDispositionSchema),
 	gateResults: v.optional(v.pipe(v.array(GateResultSchema), v.minLength(1), v.maxLength(50))),
+	preparation: v.optional(v.object({
+		result: PreparationResultSchema,
+		createdAt: v.string(),
+	})),
+	finalIntegrity: v.optional(v.object({
+		result: IntegrationFinalIntegrityResultSchema,
+		createdAt: v.string(),
+	})),
 	preflight: v.optional(v.object({
 		result: IntegrationPreflightResultSchema,
 		createdAt: v.string(),
@@ -58,6 +76,10 @@ export const IntegrationInvocationLeaseSchema = v.object({
 
 export type IntegrationInvocationLease = v.InferOutput<typeof IntegrationInvocationLeaseSchema>;
 export interface IntegrationPreflightClaim {
+	lease: IntegrationInvocationLease;
+	newlyClaimed: boolean;
+}
+export interface IntegrationPreparationClaim {
 	lease: IntegrationInvocationLease;
 	newlyClaimed: boolean;
 }
@@ -113,10 +135,20 @@ export function ensureIntegrationInvocationSchema(db: Database.Database): void {
 			invocation_id TEXT PRIMARY KEY, evidence_json TEXT NOT NULL, created_at TEXT NOT NULL,
 			FOREIGN KEY(invocation_id) REFERENCES integration_invocations(id)
 		);
+		CREATE TABLE IF NOT EXISTS integration_preparations (
+			invocation_id TEXT PRIMARY KEY, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+			FOREIGN KEY(invocation_id) REFERENCES integration_invocations(id)
+		);
+		CREATE TABLE IF NOT EXISTS integration_final_integrity (
+			invocation_id TEXT PRIMARY KEY, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+			FOREIGN KEY(invocation_id) REFERENCES integration_invocations(id)
+		);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (10, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (11, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (12, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (13, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (14, datetime('now'));
 	`);
 }
 
@@ -134,6 +166,47 @@ export class IntegrationInvocationStore {
 		this.#db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
 		ensureIntegrationInvocationSchema(this.#db);
 		this.#now = now;
+	}
+
+	claimPreparation(integrationAttemptId: string, ownerId: string): IntegrationPreparationClaim {
+		return this.#db.transaction(() => {
+			const lease = this.get(integrationAttemptId, ownerId);
+			if (lease.preparation || lease.status === 'preparing') return { lease, newlyClaimed: false };
+			if (lease.status !== 'reserved' || lease.workerCalls !== 0 || lease.preflight) {
+				throw new IntegrationInvocationConflictError('Only an unprepared reservation can claim preparation');
+			}
+			const timestamp = this.#now().toISOString();
+			const changed = this.#db.prepare(`UPDATE integration_invocations SET status = 'preparing', started_at = ?
+				WHERE id = ? AND owner_id = ? AND status = 'reserved' AND worker_calls = 0`)
+				.run(timestamp, integrationAttemptId, ownerId);
+			if (changed.changes !== 1) throw new IntegrationInvocationConflictError('Integration preparation was claimed concurrently');
+			return { lease: this.get(integrationAttemptId, ownerId), newlyClaimed: true };
+		})();
+	}
+
+	completePreparation(integrationAttemptId: string, ownerId: string, inputResult: PreparationResult): IntegrationInvocationLease {
+		const result = v.parse(PreparationResultSchema, inputResult);
+		return this.#db.transaction(() => {
+			const lease = this.get(integrationAttemptId, ownerId);
+			if (lease.preparation) {
+				if (JSON.stringify(canonical(lease.preparation.result)) !== JSON.stringify(canonical(result))) {
+					throw new IntegrationInvocationConflictError('Integration preparation conflicts with existing evidence');
+				}
+				return lease;
+			}
+			if (lease.status !== 'preparing' || lease.workerCalls !== 0) {
+				throw new IntegrationInvocationConflictError('Only a claimed preparation can record evidence');
+			}
+			const timestamp = this.#now().toISOString();
+			this.#db.prepare('INSERT INTO integration_preparations (invocation_id, result_json, created_at) VALUES (?, ?, ?)')
+				.run(integrationAttemptId, JSON.stringify(result), timestamp);
+			const status = result.status === 'passed' ? 'reserved' : 'blocked';
+			const changed = this.#db.prepare(`UPDATE integration_invocations SET status = ?, started_at = NULL, finished_at = ?
+				WHERE id = ? AND owner_id = ? AND status = 'preparing' AND worker_calls = 0`)
+				.run(status, status === 'blocked' ? timestamp : null, integrationAttemptId, ownerId);
+			if (changed.changes !== 1) throw new IntegrationInvocationConflictError('Integration preparation was settled concurrently');
+			return this.get(integrationAttemptId, ownerId);
+		})();
 	}
 
 	close(): void {
@@ -193,6 +266,9 @@ export class IntegrationInvocationStore {
 			if (lease.status !== 'reserved' || lease.workerCalls !== 0) {
 				throw new IntegrationInvocationConflictError('Only an unclaimed reservation can record integration preflight');
 			}
+			if (result.status === 'passed' && lease.preparation?.result.status !== 'passed') {
+				throw new IntegrationInvocationConflictError('Passing preflight requires successful repository preparation');
+			}
 			const timestamp = this.#now().toISOString();
 			this.#db.prepare('INSERT INTO integration_preflights (invocation_id, result_json, created_at) VALUES (?, ?, ?)')
 				.run(integrationAttemptId, JSON.stringify(result), timestamp);
@@ -236,17 +312,39 @@ export class IntegrationInvocationStore {
 		})();
 	}
 
-	settleGates(integrationAttemptId: string, ownerId: string, inputResults: GateResult[]): IntegrationInvocationLease {
+	settleGates(
+		integrationAttemptId: string,
+		ownerId: string,
+		inputResults: GateResult[],
+		inputIntegrity: IntegrationFinalIntegrityResult,
+	): IntegrationInvocationLease {
 		const results = v.parse(v.pipe(v.array(GateResultSchema), v.minLength(1), v.maxLength(50)), inputResults);
+		const integrity = v.parse(IntegrationFinalIntegrityResultSchema, inputIntegrity);
 		return this.#db.transaction(() => {
 			const lease = this.get(integrationAttemptId, ownerId);
 			if (lease.status !== 'awaiting_gates' || lease.outcome?.status !== 'succeeded') {
 				throw new IntegrationInvocationConflictError('Only a successful worker awaiting gates can settle gate evidence');
 			}
+			if (integrity.inspection) {
+				const parent = this.getParentContext(integrationAttemptId, ownerId);
+				const expected = evaluateIntegrationFinalIntegrity({
+					baseCommit: parent.baseCommit,
+					assemblyPatchSha256: parent.assemblyPatchSha256,
+					assemblyChangedPaths: parent.assemblyChangedPaths,
+					repository: parent.repository,
+					outcome: lease.outcome,
+				}, integrity.inspection);
+				if (JSON.stringify(canonical(expected)) !== JSON.stringify(canonical(integrity))) {
+					throw new IntegrationInvocationConflictError('Final integrity evidence does not match durable invocation parentage');
+				}
+			}
 			const timestamp = this.#now().toISOString();
-			const status = results.every(({ status: gateStatus }) => gateStatus === 'passed') ? 'succeeded' : 'blocked';
+			const status = results.every(({ status: gateStatus }) => gateStatus === 'passed') && integrity.status === 'passed'
+				? 'succeeded' : 'blocked';
 			this.#db.prepare('INSERT INTO integration_gate_runs (invocation_id, results_json, created_at) VALUES (?, ?, ?)')
 				.run(integrationAttemptId, JSON.stringify(results), timestamp);
+			this.#db.prepare('INSERT INTO integration_final_integrity (invocation_id, result_json, created_at) VALUES (?, ?, ?)')
+				.run(integrationAttemptId, JSON.stringify(integrity), timestamp);
 			const changed = this.#db.prepare(`UPDATE integration_invocations SET status = ?, finished_at = ?
 				WHERE id = ? AND owner_id = ? AND status = 'awaiting_gates'`)
 				.run(status, timestamp, integrationAttemptId, ownerId);
@@ -281,6 +379,10 @@ export class IntegrationInvocationStore {
 			.get(integrationAttemptId) as { result_json: string; created_at: string } | undefined;
 		const workerRow = this.#db.prepare('SELECT evidence_json, created_at FROM integration_worker_runs WHERE invocation_id = ?')
 			.get(integrationAttemptId) as { evidence_json: string; created_at: string } | undefined;
+		const preparationRow = this.#db.prepare('SELECT result_json, created_at FROM integration_preparations WHERE invocation_id = ?')
+			.get(integrationAttemptId) as { result_json: string; created_at: string } | undefined;
+		const integrityRow = this.#db.prepare('SELECT result_json, created_at FROM integration_final_integrity WHERE invocation_id = ?')
+			.get(integrationAttemptId) as { result_json: string; created_at: string } | undefined;
 		return v.parse(IntegrationInvocationLeaseSchema, {
 			integrationAttemptId: row.id, ownerId: row.owner_id, assemblyId: row.assembly_id,
 			planSha256: row.plan_sha256, taskId: row.task_id, status: row.status,
@@ -288,6 +390,8 @@ export class IntegrationInvocationStore {
 			startedAt: row.started_at ?? undefined, finishedAt: row.finished_at ?? undefined,
 			outcome: row.outcome_json ? JSON.parse(row.outcome_json as string) : undefined,
 			gateResults: gateRow ? JSON.parse(gateRow.results_json) : undefined,
+			preparation: preparationRow ? { result: JSON.parse(preparationRow.result_json), createdAt: preparationRow.created_at } : undefined,
+			finalIntegrity: integrityRow ? { result: JSON.parse(integrityRow.result_json), createdAt: integrityRow.created_at } : undefined,
 			preflight: preflightRow ? { result: JSON.parse(preflightRow.result_json), createdAt: preflightRow.created_at } : undefined,
 			workerRun: workerRow ? { evidence: JSON.parse(workerRow.evidence_json), createdAt: workerRow.created_at } : undefined,
 		});
