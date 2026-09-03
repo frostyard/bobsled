@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { RunRecordSchema, type RunRecord } from './ledger-contracts.ts';
 import { DraftPublicationRecordSchema, type DraftPublicationRecord } from './publication-contracts.ts';
+import { MultiWorkerOperatorEvidenceSchema, type MultiWorkerOperatorEvidence } from './multi-worker-operator-view.ts';
 
 export const OperatorBoardLaneSchema = v.picklist(['ready', 'working', 'review', 'delivery', 'attention', 'history']);
 export const OperatorBoardActionKindSchema = v.picklist([
@@ -34,10 +35,14 @@ export const OperatorBoardCardSchema = v.object({
 		blockingFindings: v.optional(v.number()),
 		checksPassed: v.optional(v.number()),
 		checksTotal: v.optional(v.number()),
+		activeWorkers: v.optional(v.number()),
+		workerTasksSucceeded: v.optional(v.number()),
+		workerTasksTotal: v.optional(v.number()),
 	}),
 	actions: v.array(OperatorBoardActionSchema),
 	run: RunRecordSchema,
 	publication: v.optional(DraftPublicationRecordSchema),
+	multiWorker: v.optional(MultiWorkerOperatorEvidenceSchema),
 });
 
 export const OperatorBoardViewSchema = v.object({
@@ -70,7 +75,7 @@ function action(kind: OperatorBoardAction['kind'], label: string, emphasis: Oper
 	return { kind, label, emphasis, ...(url ? { url } : {}) };
 }
 
-export function projectRunForBoard(run: RunRecord, publication?: DraftPublicationRecord): OperatorBoardCard {
+export function projectRunForBoard(run: RunRecord, publication?: DraftPublicationRecord, multiWorker?: MultiWorkerOperatorEvidence): OperatorBoardCard {
 	const job = run.jobs[0];
 	if (!job) throw new Error(`Run ${run.id} has no job to project`);
 	const attempt = job.attempts.at(-1);
@@ -87,6 +92,7 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 		...(gates.length ? { gatesPassed: gates.filter((gate) => gate.status === 'passed').length, gatesTotal: gates.length } : {}),
 		...(report ? { findings: report.findings.length, blockingFindings: report.findings.filter(({ blocking }) => blocking).length } : {}),
 		...(publication?.checks.length ? { checksPassed, checksTotal: publication.checks.length } : {}),
+		...(multiWorker ? { activeWorkers: multiWorker.activeWorkers, workerTasksSucceeded: multiWorker.tasksSucceeded, workerTasksTotal: multiWorker.tasksTotal } : {}),
 	};
 
 	let lane: OperatorBoardLane = 'attention';
@@ -146,17 +152,32 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 		summary = attention; actions = [action('supersede', 'Start revised run', 'primary')];
 	}
 
+	const multiWorkerMayControl = multiWorker && !publication && !review && run.status !== 'cancelled' && run.status !== 'failed';
+	if (multiWorkerMayControl && multiWorker.status === 'active') {
+		lane = 'working'; phase = 'multi-worker fan-out'; summary = multiWorker.summary; attention = undefined; actions = [];
+	} else if (multiWorkerMayControl && (multiWorker.status === 'not_started' || multiWorker.status === 'waiting')) {
+		lane = 'working'; phase = multiWorker.status === 'not_started' ? 'fan-out planned' : 'fan-out waiting';
+		summary = multiWorker.summary; attention = undefined; actions = [];
+	} else if (multiWorkerMayControl && (multiWorker.status === 'blocked' || multiWorker.status === 'expired')) {
+		lane = 'attention'; phase = multiWorker.status === 'expired' ? 'fan-out budget expired' : 'fan-out blocked';
+		attention = multiWorker.reasons[0] ?? multiWorker.summary; summary = multiWorker.summary; actions = [];
+	} else if (multiWorkerMayControl && multiWorker.status === 'complete') {
+		lane = 'working'; phase = 'fan-out complete'; summary = `${multiWorker.summary} Integration is the next internal stage.`; attention = undefined; actions = [];
+	}
+
 	return v.parse(OperatorBoardCardSchema, {
 		id: run.id, repositoryId: job.repositoryId, workItemKey: job.workItemSnapshot.key,
-		title: job.workItemSnapshot.title, lane, phase, attention, summary, updatedAt: run.updatedAt,
-		metrics, actions, run, publication,
+		title: job.workItemSnapshot.title, lane, phase, attention, summary,
+		updatedAt: multiWorker && multiWorker.updatedAt > run.updatedAt ? multiWorker.updatedAt : run.updatedAt,
+		metrics, actions, run, publication, multiWorker,
 	});
 }
 
-export function projectOperatorBoard(runs: RunRecord[], publications: DraftPublicationRecord[], now = new Date()): OperatorBoardView {
+export function projectOperatorBoard(runs: RunRecord[], publications: DraftPublicationRecord[], now = new Date(), multiWorker: MultiWorkerOperatorEvidence[] = []): OperatorBoardView {
 	const byRun = new Map(publications.map((publication) => [publication.runId, publication]));
+	const byJob = new Map(multiWorker.map((evidence) => [evidence.jobId, evidence]));
 	return v.parse(OperatorBoardViewSchema, {
 		generatedAt: now.toISOString(),
-		cards: runs.map((run) => projectRunForBoard(run, byRun.get(run.id))).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+		cards: runs.map((run) => projectRunForBoard(run, byRun.get(run.id), run.jobs[0] ? byJob.get(run.jobs[0].id) : undefined)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
 	});
 }

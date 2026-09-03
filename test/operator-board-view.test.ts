@@ -35,3 +35,44 @@ test('human-gated work is attention, while cancelled work moves to history', () 
 		assert.equal(view.cards.find(({ id }) => id === cancelled.id)?.lane, 'history');
 	} finally { ledger.close(); }
 });
+
+test('multi-worker evidence controls active and exhausted board states without adding actions', () => {
+	const ledger = new JobLedger(':memory:', () => new Date('2026-09-03T03:00:00.000Z'));
+	try {
+		const run = ledger.admit({ repositoryId: 'frostyard/clix', workItem }, principal, 'fanout');
+		const jobId = run.jobs[0]!.id;
+		const base = {
+			planId: '11111111-1111-4111-8111-111111111111', jobId,
+			activeWorkers: 2, tasksSucceeded: 0, tasksTotal: 3,
+			budget: { initialized: true, attemptsUsed: 2, attemptsMax: 4, concurrentUsed: 2, concurrentMax: 2,
+				openaiCodexCallsUsed: 2, openaiCodexCallsMax: 3, githubCopilotCallsUsed: 0, githubCopilotCallsMax: 1,
+				deadlineAt: '2026-09-03T04:00:00.000Z' },
+			tasks: [
+				{ taskId: 'api', title: 'API', state: 'running' as const, attemptNumber: 1, provider: 'openai-codex' as const },
+				{ taskId: 'ui', title: 'UI', state: 'running' as const, attemptNumber: 1, provider: 'openai-codex' as const },
+				{ taskId: 'integration', title: 'Integration', state: 'queued' as const },
+			],
+			reasons: [], updatedAt: '2026-09-03T03:01:00.000Z', executionAuthorized: false as const, modelDispatchAuthorized: false as const,
+		};
+		const active = projectRunForBoard(run, undefined, { ...base, status: 'active', summary: '2 workers active; 0/3 tasks succeeded.' });
+		assert.equal(active.lane, 'working');
+		assert.equal(active.phase, 'multi-worker fan-out');
+		assert.equal(active.updatedAt, base.updatedAt);
+		assert.equal(active.metrics.activeWorkers, 2);
+		assert.equal(active.actions.length, 0);
+
+		const blocked = projectRunForBoard(run, undefined, {
+			...base, status: 'blocked', activeWorkers: 0, summary: 'Subscription-call budget is exhausted.',
+			reasons: ['Subscription-call budget is exhausted for openai-codex'], updatedAt: '2026-09-03T03:02:00.000Z',
+		});
+		assert.equal(blocked.lane, 'attention');
+		assert.equal(blocked.phase, 'fan-out blocked');
+		assert.match(blocked.attention ?? '', /Subscription-call budget/);
+		assert.equal(blocked.actions.length, 0);
+
+		const cancelledRun = ledger.cancel(run.id, { expectedVersion: run.version, reason: 'Stop the parent run.' }, principal);
+		const cancelled = projectRunForBoard(cancelledRun, undefined, { ...base, status: 'active', summary: 'Stale active evidence.' });
+		assert.equal(cancelled.lane, 'history');
+		assert.equal(cancelled.phase, 'cancelled');
+	} finally { ledger.close(); }
+});
