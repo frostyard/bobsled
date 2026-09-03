@@ -1,0 +1,23 @@
+import { JobLedger, type Principal } from './ledger.ts';
+import { dataPath } from '../paths.ts';
+import type { DraftPublicationRecord } from './publication-contracts.ts';
+import { DraftPublicationService, PublicationPolicyBlockedError } from './publication-service.ts';
+import {
+	MultiRepositoryPublicationRecoveryExecutionStore,
+	type MultiRepositoryPublicationRecoveryExecution,
+} from './multi-repository-publication-recovery-execution-store.ts';
+
+interface PublicationAdapter { get(id:string,principal:Principal):DraftPublicationRecord; execute(id:string,principal:Principal):Promise<DraftPublicationRecord>; close?():void }
+const draftStatuses=new Set<DraftPublicationRecord['status']>(['published','checks_pending','checks_failed','ready_for_human']);
+export interface MultiRepositoryPublicationRecoveryExecutionServiceOptions { path?:string; store?:MultiRepositoryPublicationRecoveryExecutionStore; publications?:PublicationAdapter }
+
+export class MultiRepositoryPublicationRecoveryExecutionService {
+	readonly #store:MultiRepositoryPublicationRecoveryExecutionStore; readonly #publications:PublicationAdapter; readonly #ledger?:JobLedger; readonly #ownsStore:boolean; readonly #ownsPublications:boolean;
+	constructor(options:MultiRepositoryPublicationRecoveryExecutionServiceOptions={}) { const path=options.path??dataPath('bobsled.db');this.#store=options.store??new MultiRepositoryPublicationRecoveryExecutionStore(path);this.#ownsStore=!options.store;if(options.publications){this.#publications=options.publications;this.#ownsPublications=false;}else{this.#ledger=new JobLedger(path);this.#publications=new DraftPublicationService({path,ledger:this.#ledger});this.#ownsPublications=true;} }
+	close():void{if(this.#ownsPublications)this.#publications.close?.();this.#ledger?.close();if(this.#ownsStore)this.#store.close();}
+	async run(id:string,principalId:string):Promise<MultiRepositoryPublicationRecoveryExecution>{const principal={id:principalId};let execution=this.#store.get(id,principal);if(['succeeded','partial','blocked','failed'].includes(execution.status)||execution.status==='running')return execution;const plan=this.#store.planFor(id,principal);if(execution.status==='reserved'){const publications=plan.result.members.map((member)=>this.#publications.get(member.publicationId,principal));try{execution=this.#store.recordPreflight(id,publications,principal);}catch(error){return this.#store.settle(id,{recoveryPlanSha256:execution.recoveryPlanSha256,status:'blocked',members:publications.map((item)=>({repositoryId:item.repositoryId,publicationId:item.id,status:item.status,attemptCount:item.attemptCount,pullNumber:item.pullNumber,pullUrl:item.pullUrl})),reason:(error instanceof Error?error.message:'Recovery preflight failed').slice(0,4000),githubMutationsAuthorized:false,mergeAuthorized:false,rollbackAuthorized:false},principal);}}
+		const claim=this.#store.claim(id,principal);if(!claim.newlyClaimed)return claim.execution;execution=claim.execution;
+		for(let index=0;index<plan.result.retryOrder.length;index+=1){const repositoryId=plan.result.retryOrder[index]!;const member=plan.result.members.find((candidate)=>candidate.repositoryId===repositoryId)!;this.#store.recordPublicationStart(id,principal,index);try{const publication=await this.#publications.execute(member.publicationId,principal);if(publication.id!==member.publicationId||publication.repositoryId!==repositoryId||!draftStatuses.has(publication.status))throw new Error(`Linked draft was not recovered for ${repositoryId}`);}catch(error){const members=this.#members(plan,principal);const partial=members.some(({status})=>draftStatuses.has(status));return this.#store.settle(id,{recoveryPlanSha256:execution.recoveryPlanSha256,status:partial?'partial':error instanceof PublicationPolicyBlockedError?'blocked':'failed',members,failedRepositoryId:repositoryId,reason:(error instanceof Error?error.message:'Linked publication recovery failed').slice(0,4000),githubMutationsAuthorized:false,mergeAuthorized:false,rollbackAuthorized:false},principal);}}
+		const members=this.#members(plan,principal);return this.#store.settle(id,{recoveryPlanSha256:execution.recoveryPlanSha256,status:'succeeded',members,reason:'Every planned linked draft exists; merge and rollback remain human-controlled.',githubMutationsAuthorized:false,mergeAuthorized:false,rollbackAuthorized:false},principal);}
+	#members(plan:ReturnType<MultiRepositoryPublicationRecoveryExecutionStore['planFor']>,principal:Principal){return plan.result.members.map((member)=>{const item=this.#publications.get(member.publicationId,principal);return{repositoryId:item.repositoryId,publicationId:item.id,status:item.status,attemptCount:item.attemptCount,pullNumber:item.pullNumber,pullUrl:item.pullUrl};});}
+}

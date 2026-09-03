@@ -158,6 +158,32 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 		);
 		CREATE INDEX IF NOT EXISTS multi_repository_publication_recovery_plans_source_idx
 			ON multi_repository_publication_recovery_plans(source_execution_id, created_at DESC);
+		CREATE TABLE IF NOT EXISTS multi_repository_publication_recovery_executions (
+			id TEXT PRIMARY KEY, recovery_plan_id TEXT NOT NULL UNIQUE, source_execution_id TEXT NOT NULL,
+			change_set_id TEXT NOT NULL, owner_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+			request_sha256 TEXT NOT NULL, recovery_plan_sha256 TEXT NOT NULL, reason TEXT NOT NULL,
+			status TEXT NOT NULL, publications_started INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, result_sha256 TEXT, result_json TEXT,
+			UNIQUE(owner_id, idempotency_key),
+			FOREIGN KEY(recovery_plan_id) REFERENCES multi_repository_publication_recovery_plans(id),
+			FOREIGN KEY(source_execution_id) REFERENCES multi_repository_publication_executions(id),
+			FOREIGN KEY(change_set_id) REFERENCES multi_repository_change_sets(id)
+		);
+		CREATE TABLE IF NOT EXISTS multi_repository_publication_recovery_preflights (
+			execution_id TEXT PRIMARY KEY, snapshot_sha256 TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL,
+			FOREIGN KEY(execution_id) REFERENCES multi_repository_publication_recovery_executions(id)
+		);
+		CREATE TABLE IF NOT EXISTS multi_repository_publication_recovery_decisions (
+			id TEXT PRIMARY KEY, recovery_plan_id TEXT NOT NULL UNIQUE, source_execution_id TEXT NOT NULL,
+			change_set_id TEXT NOT NULL, owner_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+			request_sha256 TEXT NOT NULL, recovery_plan_sha256 TEXT NOT NULL, disposition TEXT NOT NULL,
+			superseding_change_set_id TEXT, result_sha256 TEXT NOT NULL, result_json TEXT NOT NULL,
+			reason TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(owner_id, idempotency_key),
+			FOREIGN KEY(recovery_plan_id) REFERENCES multi_repository_publication_recovery_plans(id),
+			FOREIGN KEY(source_execution_id) REFERENCES multi_repository_publication_executions(id),
+			FOREIGN KEY(change_set_id) REFERENCES multi_repository_change_sets(id),
+			FOREIGN KEY(superseding_change_set_id) REFERENCES multi_repository_change_sets(id)
+		);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (26, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (27, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (28, datetime('now'));
@@ -172,6 +198,7 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (37, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (38, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (39, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (40, datetime('now'));
 	`);
 	const leaseColumns = new Set((db.prepare('PRAGMA table_info(multi_repository_member_preparation_leases)').all() as Array<{ name: string }>).map(({ name }) => name));
 	if (!leaseColumns.has('started_at')) db.exec('ALTER TABLE multi_repository_member_preparation_leases ADD COLUMN started_at TEXT');

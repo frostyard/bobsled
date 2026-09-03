@@ -34,6 +34,9 @@ import {
 	MultiRepositoryPublicationRecoveryForbiddenError,
 	MultiRepositoryPublicationRecoveryStore,
 } from '../src/control-plane/multi-repository-publication-recovery-store.ts';
+import { MultiRepositoryPublicationRecoveryExecutionStore } from '../src/control-plane/multi-repository-publication-recovery-execution-store.ts';
+import { MultiRepositoryPublicationRecoveryExecutionService } from '../src/control-plane/multi-repository-publication-recovery-execution-service.ts';
+import { MultiRepositoryPublicationRecoveryDecisionStore } from '../src/control-plane/multi-repository-publication-recovery-decision-store.ts';
 import type { DraftPublicationRecord } from '../src/control-plane/publication-contracts.ts';
 import { repositories } from '../src/control-plane/repositories.ts';
 
@@ -137,11 +140,13 @@ async function preparePublicationBarrier(value: ReturnType<typeof fixture>) {
 }
 
 function publicationAdapter(authorization: ReturnType<MultiRepositoryPublicationAuthorizationStore['get']>, failRepositoryId?: string, blockedRepositoryId?: string) {
+	let failingRepositoryId = failRepositoryId;
 	const records = new Map<string, DraftPublicationRecord>(); const admitted: string[] = []; const executed: string[] = [];
 	const byRepository = new Map(authorization.members.map((member) => [member.repositoryId, member]));
 	return {
 		admitted, executed,
 		setStatus(id: string, status: DraftPublicationRecord['status']) { records.set(id, { ...records.get(id)!, status }); },
+		clearFailure() { failingRepositoryId = undefined; },
 		async admit(input: unknown, owner: { id: string }, key: string) {
 			const request = input as { runId: string; reason: string };
 			const repositoryId = key.split(':').at(-1)!;
@@ -162,7 +167,7 @@ function publicationAdapter(authorization: ReturnType<MultiRepositoryPublication
 		},
 		async execute(id: string) {
 			const record = records.get(id)!; executed.push(record.repositoryId);
-			if (record.repositoryId === failRepositoryId) { records.set(id, { ...record, status: 'failed', error: 'simulated upstream failure' }); throw new Error('simulated upstream failure'); }
+			if (record.repositoryId === failingRepositoryId) { records.set(id, { ...record, status: 'failed', error: 'simulated upstream failure' }); throw new Error('simulated upstream failure'); }
 			const published = { ...record, status: 'published' as const, commitSha: 'a'.repeat(40), pullNumber: executed.length, pullUrl: `https://example.invalid/${executed.length}` };
 			records.set(id, published); return published;
 		},
@@ -363,13 +368,40 @@ test('preflights all members before mutation and stops dependency rollout on par
 				assert.equal(recoveries.admit({ sourceExecutionId: execution.id, reason: 'Inspect the partial rollout before any explicit retry.' }, principal, 'partial-recovery').id, recovery.id);
 				assert.throws(() => recoveries.get(recovery.id, { id: 'operator:other' }), MultiRepositoryPublicationRecoveryForbiddenError);
 
+				const retryStore = new MultiRepositoryPublicationRecoveryExecutionStore(partialValue.path, now, recoveries);
+				const retryService = new MultiRepositoryPublicationRecoveryExecutionService({ path: partialValue.path, store: retryStore, publications: adapter });
+				try {
+					const retry = retryStore.reserve({ recoveryPlanId: recovery.id, reason: 'Retry only the dependency-ordered unpublished suffix.' }, principal, 'partial-retry');
+					adapter.clearFailure();
+					const recovered = await retryService.run(retry.id, principal.id);
+					assert.equal(recovered.status, 'succeeded'); assert.equal(recovered.publicationsStarted, 1);
+					assert.deepEqual(adapter.executed, ['frostyard/clix', 'frostyard/frostyard-org', 'frostyard/frostyard-org']);
+					assert.equal((await retryService.run(retry.id, principal.id)).status, 'succeeded'); assert.equal(adapter.executed.length, 3);
+					assert.equal(recovered.mergeAuthorized, false); assert.equal(recovered.rollbackAuthorized, false);
+				} finally { retryService.close(); retryStore.close(); }
+
 				adapter.setStatus(result.result!.members[0]!.publicationId, 'merged');
 				const progressed = recoveries.admit({ sourceExecutionId: execution.id, reason: 'Reinspect linked publication state after external progress.' }, principal, 'progressed-recovery');
 				assert.equal(progressed.result.status, 'operator_decision_required');
 				assert.match(progressed.result.violations[0] ?? '', /already merged/);
+				const decisions = new MultiRepositoryPublicationRecoveryDecisionStore(partialValue.path, now, recoveries);
+				try {
+					const decision = decisions.record({ recoveryPlanId: progressed.id, disposition: 'human_rollback_required', reason: 'Preserve exact human rollback guidance without executing GitHub mutations.' }, principal, 'rollback-decision');
+					assert.equal(decision.result.rollbackExecuted, false); assert.equal(decision.result.githubMutationAuthorized, false);
+					assert.deepEqual(decision.result.rollbackOrder.map(({ repositoryId }) => repositoryId), ['frostyard/frostyard-org', 'frostyard/clix']);
+					assert.equal(decisions.record({ recoveryPlanId: progressed.id, disposition: 'human_rollback_required', reason: 'Preserve exact human rollback guidance without executing GitHub mutations.' }, principal, 'rollback-decision').id, decision.id);
+
+					const replacementParents = new MultiRepositoryChangeSetStore(partialValue.path, now, prepared.policy);
+					const replacement = replacementParents.admit({ plan: { ...plan, title: 'Superseding coordinated change', objective: 'Replace the incomplete rollout through new immutable work.' }, reason: 'Create a distinct same-repository-set change set for explicit supersession.' }, principal, 'replacement-parent');
+					replacementParents.close();
+					const supersessionPlan = recoveries.admit({ sourceExecutionId: execution.id, reason: 'Record the current rollout before superseding it with new work.' }, principal, 'supersession-recovery');
+					const superseded = decisions.record({ recoveryPlanId: supersessionPlan.id, disposition: 'superseded_by_new_change_set', supersedingChangeSetId: replacement.id, reason: 'Preserve the incomplete rollout and continue through a new change set.' }, principal, 'supersession-decision');
+					assert.equal(superseded.supersedingChangeSetId, replacement.id); assert.equal(superseded.result.githubMutationAuthorized, false);
+				} finally { decisions.close(); }
 				const db = new Database(partialValue.path);
 				try {
 					assert.equal((db.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version=39').get() as { count: number }).count, 1);
+					assert.equal((db.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version=40').get() as { count: number }).count, 1);
 					db.prepare("UPDATE multi_repository_publication_recovery_plans SET result_json='{}' WHERE id=?").run(progressed.id);
 				} finally { db.close(); }
 				assert.throws(() => recoveries.get(progressed.id, principal), /malformed|integrity/);
