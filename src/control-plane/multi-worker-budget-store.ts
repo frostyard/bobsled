@@ -46,6 +46,10 @@ export const MultiWorkerBudgetAttemptSchema = v.pipe(
 export type MultiWorkerBudget = v.InferOutput<typeof MultiWorkerBudgetSchema>;
 export type MultiWorkerBudgetAttempt = v.InferOutput<typeof MultiWorkerBudgetAttemptSchema>;
 export type InferenceProvider = v.InferOutput<typeof InferenceProviderSchema>;
+export interface MultiWorkerBudgetAttemptClaim {
+	attempt: MultiWorkerBudgetAttempt;
+	newlyReserved: boolean;
+}
 
 export class MultiWorkerBudgetConflictError extends Error {}
 export class MultiWorkerBudgetForbiddenError extends Error {}
@@ -129,6 +133,10 @@ export class MultiWorkerBudgetStore {
 	}
 
 	reserveAttempt(input: unknown, ownerId: string, idempotencyKey: string): MultiWorkerBudgetAttempt {
+		return this.reserveAttemptClaim(input, ownerId, idempotencyKey).attempt;
+	}
+
+	reserveAttemptClaim(input: unknown, ownerId: string, idempotencyKey: string): MultiWorkerBudgetAttemptClaim {
 		const request = v.parse(v.object({
 			attemptId: v.pipe(v.string(), v.uuid()), planId: v.pipe(v.string(), v.uuid()),
 			taskId: WorkPlanTaskIdSchema, provider: InferenceProviderSchema,
@@ -140,7 +148,7 @@ export class MultiWorkerBudgetStore {
 				.get(ownerId, idempotencyKey) as { id: string; request_hash: string } | undefined;
 			if (replay) {
 				if (replay.request_hash !== requestHash) throw new MultiWorkerBudgetConflictError('Idempotency key was used for different budget input');
-				return this.getAttempt(replay.id, ownerId);
+				return { attempt: this.getAttempt(replay.id, ownerId), newlyReserved: false };
 			}
 			const budget = this.getBudget(request.planId, ownerId);
 			if (this.#now().getTime() >= Date.parse(budget.deadlineAt)) throw new MultiWorkerBudgetConflictError('Multi-worker runtime budget has expired');
@@ -172,7 +180,7 @@ export class MultiWorkerBudgetStore {
 			} catch (error) {
 				throw new MultiWorkerBudgetConflictError(`Budget attempt conflicts with existing evidence: ${error instanceof Error ? error.message : 'database constraint'}`);
 			}
-			return this.getAttempt(request.attemptId, ownerId);
+			return { attempt: this.getAttempt(request.attemptId, ownerId), newlyReserved: true };
 		}).immediate();
 	}
 
@@ -231,6 +239,13 @@ export class MultiWorkerBudgetStore {
 			modelCalls: row.model_calls, createdAt: row.created_at, startedAt: row.started_at ?? undefined,
 			finishedAt: row.finished_at ?? undefined, reason: row.reason ?? undefined,
 		});
+	}
+
+	listAttempts(planId: string, ownerId: string): MultiWorkerBudgetAttempt[] {
+		this.getBudget(planId, ownerId);
+		const rows = this.#db.prepare(`SELECT id FROM multi_worker_budget_attempts
+			WHERE plan_id = ? AND owner_id = ? ORDER BY created_at, task_id, attempt_number`).all(planId, ownerId) as Array<{ id: string }>;
+		return rows.map(({ id }) => this.getAttempt(id, ownerId));
 	}
 
 	#budgetRow(planId: string): Record<string, unknown> | undefined {
