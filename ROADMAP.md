@@ -64,7 +64,7 @@ Issue-action evidence: the explicitly authorized temporary [Bobsled issue #17](h
 - Trusted patch computation, protected-path enforcement, size limits, and unchanged-HEAD checks.
 - Durable plans, logs, gate results, patches, digests, and failure evidence.
 
-### M4 — Independent review and draft PR publication — `ACTIVE`
+### M4 — Independent review and draft PR publication — `DONE`
 
 - [x] Automatic fresh-context Copilot review over an immutable, read-only repository snapshot.
 - [x] At most one bounded Codex remediation round followed by a new independent verdict.
@@ -73,9 +73,16 @@ Issue-action evidence: the explicitly authorized temporary [Bobsled issue #17](h
 - [x] Five-lane operator board with card actions, evidence details, and documented lane criteria.
 - [x] Bounded authenticated-operator identity chip in the board header without exposing immutable IDs, roles, or session metadata.
 - [x] Enable publication for one explicitly authorized non-test repository.
-- [ ] Live-prove draft branch/PR creation and observe required GitHub checks; human review and merge remain mandatory.
+- [x] Live-prove draft branch/PR creation and observe required GitHub checks; human review and merge remain mandatory.
 
 Acceptance target: `frostyard/frostyard-org` snapshots its immutable repository identity, runs `npm ci` before execution, requires `npm run ci`, sends successful patches through automatic fresh-context review, and may publish only generated non-force draft branches. Cloudflare's `Workers Builds: frostyard-org` check is required before handoff. Automation/deployment configuration is protected, and Bobsled retains no merge or deployment capability.
+
+Live acceptance evidence: Bobsled triaged, implemented, gated, independently approved, and published [frostyard-org PR #6](https://github.com/frostyard/frostyard-org/pull/6) as a draft. The required Cloudflare Workers build passed, and a human merged the PR. A second approved change was correctly blocked when `main` advanced beyond its reviewed base; after the enrolled source was refreshed and the task rerun, Bobsled published [frostyard-org PR #7](https://github.com/frostyard/frostyard-org/pull/7), whose required Cloudflare check also passed.
+
+Post-acceptance hardening:
+
+- [ ] Reconcile an externally closed or merged draft PR into durable publication and board state instead of leaving it at `ready_for_human`.
+- [ ] When `main` advances cleanly after approval, reapply and revalidate the exact approved patch on the new base without another implementation-worker call; fail closed on conflicts or unverifiable context drift.
 
 ### M4-R — Standalone public repository preparation — `DONE`
 
