@@ -142,7 +142,8 @@ The authenticated operator board now joins each run through its owned job to the
 - [x] Add a typed repository dependency graph and cross-repository change-set record.
 - [x] Plan version/API compatibility and rollout order across repositories.
 - [ ] Maintain one isolated job, policy snapshot, gate set, branch, and PR per repository.
-- [ ] Add cross-repository verification and a human-readable rollout/rollback plan.
+- [x] Bind all completed member evidence into a human-readable compatibility and rollout/rollback plan.
+- [ ] Execute cross-repository compatibility verification against that immutable plan.
 - [ ] Publish linked draft PRs only after every required repository reaches a publishable state.
 - [ ] Expose partial failure, retry, supersession, and rollback explicitly.
 
@@ -163,6 +164,8 @@ Migration 31 adds a principal-scoped execution-preflight reservation for one suc
 Migration 32 re-inspects the exact prepared Git worktree immediately before provider submission. Passing evidence requires the worktree root, HEAD, index, tracked files, and untracked files to remain clean at the reserved base. One immediate transaction persists the preflight, creates attempt 1, moves the member run/job to active/running, records the coordinated approval/audit trail, and consumes the reservation's sole worker-call claim. Concurrent callers converge on the same attempt and cannot receive a second claim. Dirty, unreadable, mismatched, or changed parentage records a terminal zero-call block or fails closed; running reads independently verify the attempt ID, number, status, start time, and run/job state. The claim is internal and dormant under current empty coordination allowlists; no HTTP/UI action or worker orchestration is added yet, and GitHub, publication, rollout, and merge remain unauthorized.
 
 Migration 33 consumes a newly claimed member attempt through the existing native Codex implementation, trusted Git evidence, and repository-gate pipeline without recreating its already prepared workspace or rerunning preparation. The reusable execution runner rechecks the trusted root, base HEAD, and clean status immediately before dispatch, stores artifacts under the change-set member lineage, and settles the shared run/job/attempt exactly once. A separate atomic reconciliation marks the reservation terminal and consumes its preparation lease; a restart between ledger completion and reconciliation converges without a second model call. Policy-required automatic review resolves the preserved workspace and evidence from the attempt outcome rather than a legacy directory convention. Concurrent callers, terminal replay, post-preflight tampering, worker/gate failure, and review races remain fail closed. This service is internal; it adds no HTTP/UI action, GitHub mutation, publication, rollout, or merge authority.
+
+Migration 34 adds the all-member barrier before compatibility verification. One principal-scoped, idempotent plan may be admitted only after every scheduled run/job/current attempt has succeeded, every changed member with review enabled has exactly one approved review, and a trusted draft or reviewed-patch artifact digest exists. Compatibility checks bind each declared contract to both participating patch digests. Rollout layers preserve the immutable dependency schedule; rollback reverses both layer and within-layer order. Reads reconstruct the complete expected result from parent contracts, schedule layers, and current trusted ledger artifacts, so a forged JSON/digest pair or later member-evidence drift fails closed. The plan explicitly grants no verification execution, GitHub mutation, publication, rollout, or merge authority.
 
 ### M7 — Organization-scale operations — `PLANNED`
 
