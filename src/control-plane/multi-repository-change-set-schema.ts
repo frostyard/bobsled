@@ -18,6 +18,17 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 		);
 		CREATE INDEX IF NOT EXISTS multi_repository_change_sets_owner_created_idx
 			ON multi_repository_change_sets(owner_id, created_at DESC);
+		CREATE TABLE IF NOT EXISTS multi_repository_change_set_authorizations (
+			id TEXT PRIMARY KEY, change_set_id TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL, request_sha256 TEXT NOT NULL, plan_sha256 TEXT NOT NULL,
+			member_set_sha256 TEXT NOT NULL, members_json TEXT NOT NULL, reason TEXT NOT NULL,
+			status TEXT NOT NULL, created_at TEXT NOT NULL,
+			UNIQUE(owner_id, idempotency_key),
+			FOREIGN KEY(change_set_id) REFERENCES multi_repository_change_sets(id)
+		);
+		CREATE INDEX IF NOT EXISTS multi_repository_change_set_authorizations_owner_created_idx
+			ON multi_repository_change_set_authorizations(owner_id, created_at DESC);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (26, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (27, datetime('now'));
 	`);
 }
