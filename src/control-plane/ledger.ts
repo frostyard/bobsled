@@ -29,6 +29,7 @@ import { ensureIntegrationInvocationSchema } from './integration-invocation-stor
 import { ensureIntegrationConflictAgentInvocationSchema } from './integration-conflict-agent-invocation-store.ts';
 import { ensureMultiWorkerBudgetSchema } from './multi-worker-budget-store.ts';
 import { ensurePublicationRebaseSchema } from './publication-rebase-schema.ts';
+import { ensurePublicationRebaseReviewSchema } from './publication-rebase-review-schema.ts';
 import { dataPath } from '../paths.ts';
 
 export interface Principal {
@@ -107,8 +108,8 @@ export class JobLedger {
 		this.#db = new Database(path);
 		if (path !== ':memory:') chmodSync(path, 0o600);
 		this.#db.pragma('foreign_keys = ON');
-		this.#db.pragma('journal_mode = WAL');
 		this.#db.pragma('busy_timeout = 5000');
+		this.#db.pragma('journal_mode = WAL');
 		this.#now = now;
 		this.#migrate();
 	}
@@ -168,6 +169,7 @@ export class JobLedger {
 		ensureIntegrationConflictAgentInvocationSchema(this.#db);
 		ensureMultiWorkerBudgetSchema(this.#db);
 		ensurePublicationRebaseSchema(this.#db);
+		ensurePublicationRebaseReviewSchema(this.#db);
 	}
 
 	admit(input: unknown, principal: Principal, idempotencyKey: string): RunRecord {
