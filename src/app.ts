@@ -408,7 +408,7 @@ app.post('/api/publication-recoveries/resolutions', async (context) => {
 app.get('/health', (context) =>
 	context.json({
 		ok: true,
-		agents: ['bobsled', 'codex', 'copilot', 'triage', 'implementation-worker', 'integration-worker', 'integration-conflict-worker', 'adversarial-reviewer', 'remediation-worker'],
+		agents: ['bobsled', 'codex', 'copilot', 'triage', 'intake-brief-revision', 'implementation-worker', 'integration-worker', 'integration-conflict-worker', 'adversarial-reviewer', 'remediation-worker'],
 		repositories: repositories.map(({ id, readOnly }) => ({ id, readOnly })),
 		githubApp: githubAppStatus(),
 		operatorAuth: operatorAuthStatus(),
