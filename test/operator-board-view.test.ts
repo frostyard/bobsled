@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import { JobLedger } from '../src/control-plane/ledger.ts';
 import { projectOperatorBoard, projectRunForBoard } from '../src/control-plane/operator-board-view.ts';
 import type { DraftPublicationRecord } from '../src/control-plane/publication-contracts.ts';
+import type { PublicationRebaseRecord } from '../src/control-plane/publication-rebase-contracts.ts';
+import type { PublicationRebaseReviewRecord } from '../src/control-plane/publication-rebase-review-contracts.ts';
 
 const principal = { id: 'operator:board-test' };
 const workItem = { source: 'manual' as const, key: 'manual:board', title: 'Exercise the board', body: 'Keep operator state obvious.', labels: [] };
@@ -62,6 +64,56 @@ test('externally merged and closed pull requests become terminal history', () =>
 		assert.equal(closed.lane, 'history');
 		assert.equal(closed.phase, 'closed without merge');
 		assert.deepEqual(closed.actions.map(({ kind }) => kind), ['refresh_checks', 'open_pull_request']);
+	} finally { ledger.close(); }
+});
+
+test('stale-base recovery advances through explicit replay, review, and promotion actions', () => {
+	const ledger = new JobLedger(':memory:', () => new Date('2026-09-03T10:00:00.000Z'));
+	try {
+		const run = ledger.admit({ repositoryId: 'frostyard/frostyard-org', workItem }, principal, 'stale-recovery');
+		const publication = {
+			id: '11111111-1111-4111-8111-111111111111', ownerId: principal.id, runId: run.id, jobId: run.jobs[0]!.id,
+			attemptId: '22222222-2222-4222-8222-222222222222', reviewId: '33333333-3333-4333-8333-333333333333',
+			repositoryId: 'frostyard/frostyard-org', status: 'blocked', baseCommit: 'a'.repeat(40), approvedPatchSha256: 'b'.repeat(64),
+			branchName: 'bobsled/stale', title: workItem.title, body: 'Durable draft body', marker: '<!-- marker -->',
+			requiredCheckNames: ['verify'], reason: 'Prepare the reviewed draft.', blockedReason: 'Remote main moved beyond the approved base commit',
+			attemptCount: 0, checks: [], createdAt: '2026-09-03T10:01:00.000Z', updatedAt: '2026-09-03T10:01:00.000Z',
+		} satisfies DraftPublicationRecord;
+		const available = projectRunForBoard(run, publication);
+		assert.equal(available.phase, 'stale base'); assert.deepEqual(available.actions.map(({ kind }) => kind), ['replay_publication']);
+
+		const rebase = {
+			id: '44444444-4444-4444-8444-444444444444', ownerId: principal.id, sourcePublicationId: publication.id,
+			repositoryId: publication.repositoryId, status: 'validated', oldBaseCommit: publication.baseCommit, newBaseCommit: 'c'.repeat(40),
+			approvedPatchSha256: publication.approvedPatchSha256, replayedPatchSha256: 'd'.repeat(64), sourceChangedPaths: ['src/app.ts'],
+			replayedChangedPaths: ['src/app.ts'], conflictPaths: [], workspacePath: '/trusted/replay',
+			preparation: { name: 'prepare', command: 'mise install', networkAccess: true, status: 'passed', exitCode: 0, durationMs: 1, stdout: '', stderr: '', truncated: false },
+			gates: [{ id: 'verify', name: 'Verify', command: 'npm test', status: 'passed', exitCode: 0, durationMs: 1, stdout: '', stderr: '', truncated: false }],
+			modelCalls: 0, reviewRequired: true, reviewAuthorized: false, publicationAuthorized: false, reason: 'Replay on current base.',
+			createdAt: '2026-09-03T10:02:00.000Z', updatedAt: '2026-09-03T10:03:00.000Z',
+		} satisfies PublicationRebaseRecord;
+		const pendingReplay = projectRunForBoard(run, publication, undefined, {
+			sourcePublicationId: publication.id, rebase: { ...rebase, status: 'pending' },
+		});
+		assert.equal(pendingReplay.phase, 'replay pending'); assert.equal(pendingReplay.actions[0]?.label, 'Resume replay');
+		const replayed = projectRunForBoard(run, publication, undefined, { sourcePublicationId: publication.id, rebase });
+		assert.equal(replayed.lane, 'review'); assert.deepEqual(replayed.actions.map(({ kind }) => kind), ['review_publication_replay']);
+
+		const review = {
+			id: '55555555-5555-4555-8555-555555555555', ownerId: principal.id, rebaseId: rebase.id, sourcePublicationId: publication.id,
+			repositoryId: publication.repositoryId, status: 'approved', baseCommit: rebase.newBaseCommit!, patchSha256: rebase.replayedPatchSha256!,
+			changedPaths: rebase.replayedChangedPaths, workspacePath: rebase.workspacePath!, repositoryContextPath: '/trusted/context',
+			report: { verdict: 'approve', summary: 'Fresh review approved.', findings: [], testedClaims: [], residualRisks: [] },
+			conversationId: 'conversation', submissionId: 'submission', modelCalls: 1, promotionAuthorized: false, publicationAuthorized: false,
+			reason: 'Run fresh review.', createdAt: '2026-09-03T10:04:00.000Z', updatedAt: '2026-09-03T10:05:00.000Z',
+		} satisfies PublicationRebaseReviewRecord;
+		const pendingReview = projectRunForBoard(run, publication, undefined, {
+			sourcePublicationId: publication.id, rebase,
+			review: { ...review, status: 'pending', modelCalls: 0, report: undefined, repositoryContextPath: undefined, conversationId: undefined, submissionId: undefined },
+		});
+		assert.equal(pendingReview.phase, 'fresh review pending'); assert.equal(pendingReview.actions[0]?.label, 'Resume fresh review');
+		const approved = projectRunForBoard(run, publication, undefined, { sourcePublicationId: publication.id, rebase, review });
+		assert.equal(approved.lane, 'delivery'); assert.deepEqual(approved.actions.map(({ kind }) => kind), ['promote_publication_replay']);
 	} finally { ledger.close(); }
 });
 

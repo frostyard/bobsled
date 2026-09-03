@@ -383,3 +383,5 @@ export class PublicationRebaseService {
 		ensurePublicationRebaseSchema(this.#db);
 	}
 }
+
+export const publicationRebases = new PublicationRebaseService();

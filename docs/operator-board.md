@@ -9,7 +9,7 @@ Only admitted runs appear on the board. An issue or manual task that has not com
 The server evaluates the latest durable state in this order so a later or more urgent phase wins:
 
 1. Cancelled or failed run
-2. Existing publication record
+2. Existing publication and stale-base recovery records
 3. Existing review record
 4. Linked multi-worker implementation plan
 5. Active implementation attempt
@@ -44,11 +44,15 @@ This includes repository preparation, the implementation worker, and trusted imp
 
 A linked multi-worker plan also places the card in `Working` while it is planned, waiting, active, or complete-but-awaiting integration. Later review and publication evidence still takes precedence, as do a cancelled or failed parent run.
 
+A stale-base recovery is also `Working` while the zero-model exact-patch replay is pending or running.
+
 ### Review
 
 A card is `Review` when there is no publication record and its latest adversarial review is `queued` or `running`.
 
 The lane covers the initial independent review, the single policy-permitted remediation round, trusted post-remediation gates, and any fresh final review. These steps are automatic, so the card normally has no mutation action; **Details** exposes progress and evidence.
+
+A validated stale-base replay enters `Review` with **Run fresh review**. Once authorized, its one fresh Copilot review remains in this lane until it settles; a model-bearing result cannot be retried.
 
 ### Delivery
 
@@ -59,12 +63,15 @@ A card is `Delivery` when either:
 
 Depending on the exact phase, the card may offer **Prepare draft PR**, **Publish draft PR**, **Refresh status**, or **Open draft PR**. **Refresh status** first verifies the recorded pull request's immutable number, URL, branch, commit, base, and Bobsled marker, then reconciles its open/closed/merged lifecycle and required checks. `ready_for_human` means Bobsled's required checks passed; Bobsled still cannot merge.
 
+An approved stale-base review enters `Delivery` with **Prepare recovered draft PR**. That action creates a new immutable pending publication linked to the original blocked publication; **Publish draft PR** remains a separate explicit action.
+
 ### Attention
 
 A card is `Attention` when a human decision or recovery path is required. Qualifying states are:
 
 - run status `failed`;
 - publication `blocked`, `failed`, or `checks_failed`;
+- a stale-base publication awaiting **Replay on current base**, or a replay/review that blocked with retained evidence;
 - review `blocked` or `failed`;
 - pre-execution policy block with no implementation attempt (awaiting human approval);
 - a successful historical patch with no review record (review recovery);

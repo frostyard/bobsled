@@ -2,12 +2,25 @@ import * as v from 'valibot';
 import { RunRecordSchema, type RunRecord } from './ledger-contracts.ts';
 import { DraftPublicationRecordSchema, type DraftPublicationRecord } from './publication-contracts.ts';
 import { MultiWorkerOperatorEvidenceSchema, type MultiWorkerOperatorEvidence } from './multi-worker-operator-view.ts';
+import { PublicationRebaseRecordSchema, type PublicationRebaseRecord } from './publication-rebase-contracts.ts';
+import { PublicationRebaseReviewRecordSchema, type PublicationRebaseReviewRecord } from './publication-rebase-review-contracts.ts';
+import { getRepository } from './repositories.ts';
 
 export const OperatorBoardLaneSchema = v.picklist(['ready', 'working', 'review', 'delivery', 'attention', 'history']);
 export const OperatorBoardActionKindSchema = v.picklist([
 	'go_fix', 'human_override', 'cancel', 'supersede', 'manual_review', 'revise_task',
 	'prepare_publication', 'publish_publication', 'refresh_checks', 'open_pull_request',
+	'replay_publication', 'review_publication_replay', 'promote_publication_replay',
 ]);
+
+export const PublicationRecoveryOperatorEvidenceSchema = v.object({
+	sourcePublicationId: v.pipe(v.string(), v.uuid()),
+	rebase: v.optional(PublicationRebaseRecordSchema),
+	review: v.optional(PublicationRebaseReviewRecordSchema),
+	promotedPublicationId: v.optional(v.pipe(v.string(), v.uuid())),
+});
+
+export type PublicationRecoveryOperatorEvidence = v.InferOutput<typeof PublicationRecoveryOperatorEvidenceSchema>;
 
 export const OperatorBoardActionSchema = v.object({
 	kind: OperatorBoardActionKindSchema,
@@ -42,6 +55,7 @@ export const OperatorBoardCardSchema = v.object({
 	actions: v.array(OperatorBoardActionSchema),
 	run: RunRecordSchema,
 	publication: v.optional(DraftPublicationRecordSchema),
+	publicationRecovery: v.optional(PublicationRecoveryOperatorEvidenceSchema),
 	multiWorker: v.optional(MultiWorkerOperatorEvidenceSchema),
 });
 
@@ -75,7 +89,16 @@ function action(kind: OperatorBoardAction['kind'], label: string, emphasis: Oper
 	return { kind, label, emphasis, ...(url ? { url } : {}) };
 }
 
-export function projectRunForBoard(run: RunRecord, publication?: DraftPublicationRecord, multiWorker?: MultiWorkerOperatorEvidence): OperatorBoardCard {
+function staleBaseBlocked(publication: DraftPublicationRecord): boolean {
+	const repository = getRepository(publication.repositoryId);
+	if (!repository || repository.readOnly || !repository.executionPolicy.enabled || !repository.reviewPolicy.enabled
+		|| !repository.publicationPolicy.enabled || !repository.capabilities.writeCode || !repository.capabilities.writeGitHub) return false;
+	return publication.status === 'blocked'
+		&& publication.blockedReason === `Remote ${repository.defaultBranch} moved beyond the approved base commit`
+		&& publication.commitSha === undefined && publication.pullNumber === undefined;
+}
+
+export function projectRunForBoard(run: RunRecord, publication?: DraftPublicationRecord, multiWorker?: MultiWorkerOperatorEvidence, publicationRecovery?: PublicationRecoveryOperatorEvidence): OperatorBoardCard {
 	const job = run.jobs[0];
 	if (!job) throw new Error(`Run ${run.id} has no job to project`);
 	const attempt = job.attempts.at(-1);
@@ -107,6 +130,41 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 	} else if (run.status === 'failed') {
 		lane = 'attention'; phase = 'execution failed'; attention = 'Implementation did not complete successfully.';
 		summary = 'Inspect retained evidence, then start a revised run if appropriate.'; actions = [action('supersede', 'Start revised run', 'primary')];
+	} else if (publication && staleBaseBlocked(publication) && !publicationRecovery?.promotedPublicationId) {
+		const rebase = publicationRecovery?.rebase;
+		const replayReview = publicationRecovery?.review;
+		if (!rebase) {
+			lane = 'attention'; phase = 'stale base'; attention = publication.blockedReason;
+			summary = 'The approved patch must be replayed and revalidated against the current default branch.';
+			actions = [action('replay_publication', 'Replay on current base', 'primary')];
+		} else if (rebase.status === 'pending' || rebase.status === 'running') {
+			lane = 'working'; phase = rebase.status === 'pending' ? 'replay pending' : 'replaying approved patch';
+			summary = 'Bobsled is replaying the exact approved patch and rerunning trusted gates without a model call.';
+			actions = rebase.status === 'pending' ? [action('replay_publication', 'Resume replay', 'primary')] : [];
+		} else if (rebase.status === 'blocked') {
+			lane = 'attention'; phase = 'replay blocked'; attention = rebase.detail ?? rebase.blockReason;
+			summary = 'The zero-model stale-base replay could not produce publishable evidence.';
+			actions = [action('replay_publication', 'Retry zero-model replay', 'primary'), action('supersede', 'Start revised run')];
+		} else if (!replayReview) {
+			lane = 'review'; phase = 'fresh review required';
+			summary = 'The replay passed current gates and requires one fresh adversarial review before promotion.';
+			actions = [action('review_publication_replay', 'Run fresh review', 'primary')];
+		} else if (replayReview.status === 'pending' || replayReview.status === 'preparing' || replayReview.status === 'running') {
+			lane = 'review'; phase = replayReview.status === 'running' ? 'fresh adversarial review' : 'fresh review pending';
+			summary = 'One fresh read-only adversarial review is settling against the replayed patch.';
+			actions = replayReview.status === 'pending' ? [action('review_publication_replay', 'Resume fresh review', 'primary')] : [];
+		} else if (replayReview.status === 'approved') {
+			lane = 'delivery'; phase = 'replay approved';
+			summary = 'The replayed patch passed current gates and fresh adversarial review; create a new immutable draft publication attempt.';
+			actions = [action('promote_publication_replay', 'Prepare recovered draft PR', 'primary')];
+		} else {
+			lane = 'attention'; phase = `fresh review ${replayReview.status}`;
+			attention = replayReview.report?.summary ?? replayReview.detail ?? replayReview.blockReason;
+			summary = 'Fresh review did not authorize promotion; start a revised implementation run.';
+			actions = replayReview.modelCalls === 0
+				? [action('review_publication_replay', 'Retry fresh review', 'primary'), action('supersede', 'Start revised run')]
+				: [action('supersede', 'Start revised run', 'primary')];
+		}
 	} else if (publication) {
 		if (publication.status === 'merged') {
 			lane = 'history'; phase = 'merged'; summary = 'The draft pull request was merged by a human.';
@@ -174,16 +232,28 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 	return v.parse(OperatorBoardCardSchema, {
 		id: run.id, repositoryId: job.repositoryId, workItemKey: job.workItemSnapshot.key,
 		title: job.workItemSnapshot.title, lane, phase, attention, summary,
-		updatedAt: multiWorker && multiWorker.updatedAt > run.updatedAt ? multiWorker.updatedAt : run.updatedAt,
-		metrics, actions, run, publication, multiWorker,
+		updatedAt: [run.updatedAt, publication?.updatedAt, multiWorker?.updatedAt, publicationRecovery?.rebase?.updatedAt, publicationRecovery?.review?.updatedAt]
+			.filter((value): value is string => value !== undefined).sort().at(-1)!,
+		metrics, actions, run, publication, publicationRecovery, multiWorker,
 	});
 }
 
-export function projectOperatorBoard(runs: RunRecord[], publications: DraftPublicationRecord[], now = new Date(), multiWorker: MultiWorkerOperatorEvidence[] = []): OperatorBoardView {
-	const byRun = new Map(publications.map((publication) => [publication.runId, publication]));
+export function projectOperatorBoard(runs: RunRecord[], publications: DraftPublicationRecord[], now = new Date(), multiWorker: MultiWorkerOperatorEvidence[] = [], rebases: PublicationRebaseRecord[] = [], rebaseReviews: PublicationRebaseReviewRecord[] = []): OperatorBoardView {
+	const byRun = new Map<string, DraftPublicationRecord>();
+	for (const publication of publications) if (!byRun.has(publication.runId)) byRun.set(publication.runId, publication);
 	const byJob = new Map(multiWorker.map((evidence) => [evidence.jobId, evidence]));
+	const publicationById = new Map(publications.map((publication) => [publication.id, publication]));
+	const reviewByRebase = new Map<string, PublicationRebaseReviewRecord>();
+	for (const review of rebaseReviews) if (!reviewByRebase.has(review.rebaseId)) reviewByRebase.set(review.rebaseId, review);
+	const promotedByReview = new Map(publications.filter(({ sourceRebaseReviewId }) => sourceRebaseReviewId).map((publication) => [publication.sourceRebaseReviewId!, publication.id]));
+	const recoveryByRun = new Map<string, PublicationRecoveryOperatorEvidence>();
+	for (const rebase of rebases) {
+		const source = publicationById.get(rebase.sourcePublicationId); if (!source || recoveryByRun.has(source.runId)) continue;
+		const review = reviewByRebase.get(rebase.id);
+		recoveryByRun.set(source.runId, { sourcePublicationId: source.id, rebase, review, ...(review && promotedByReview.has(review.id) ? { promotedPublicationId: promotedByReview.get(review.id) } : {}) });
+	}
 	return v.parse(OperatorBoardViewSchema, {
 		generatedAt: now.toISOString(),
-		cards: runs.map((run) => projectRunForBoard(run, byRun.get(run.id), run.jobs[0] ? byJob.get(run.jobs[0].id) : undefined)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+		cards: runs.map((run) => projectRunForBoard(run, byRun.get(run.id), run.jobs[0] ? byJob.get(run.jobs[0].id) : undefined, recoveryByRun.get(run.id))).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
 	});
 }

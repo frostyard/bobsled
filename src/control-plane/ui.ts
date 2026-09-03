@@ -335,6 +335,31 @@ async function publicationAction(publication, action) {
   } catch (error) { showError(error); }
 }
 
+async function publicationRecoveryAction(card, action) {
+  const recovery = card.publicationRecovery;
+  const defaults = {
+    replay_publication: 'Operator authorizes a zero-model replay of the exact approved patch against the current default branch and current quality gates.',
+    review_publication_replay: 'Operator authorizes one fresh read-only adversarial review of the validated replay; the model call cannot be retried after dispatch.',
+    promote_publication_replay: 'Operator creates a new immutable draft publication attempt from the freshly approved replay.',
+  };
+  const reason = window.prompt('Recovery authorization (recorded durably):', defaults[action]);
+  if (!reason) return;
+  let url;
+  if (action === 'replay_publication') url = recovery && recovery.rebase && recovery.rebase.status === 'pending'
+    ? '/api/publication-recoveries/replays/' + recovery.rebase.id + '/execute' : '/api/publication-recoveries/replays';
+  if (action === 'review_publication_replay' && recovery && recovery.rebase) url = recovery.review && recovery.review.status === 'pending'
+    ? '/api/publication-recoveries/reviews/' + recovery.review.id + '/execute' : '/api/publication-recoveries/replays/' + recovery.rebase.id + '/reviews';
+  if (action === 'promote_publication_replay' && recovery && recovery.review) url = '/api/publication-recoveries/reviews/' + recovery.review.id + '/promote';
+  if (!url) return showError(new Error('Publication recovery evidence is incomplete. Refresh the board before retrying.'));
+  result.textContent = action === 'review_publication_replay' ? 'Running one fresh adversarial review…' : 'Applying the trusted publication recovery transition…';
+  try {
+    const resuming = url.endsWith('/execute');
+    const body = action === 'replay_publication' && !resuming ? { sourcePublicationId: card.publication.id, reason } : { reason };
+    const completed = await json(url, { method:'POST', headers:{'content-type':'application/json','idempotency-key':browserUuid()}, body:JSON.stringify(body) });
+    result.textContent = JSON.stringify(completed, null, 2); await loadRuns();
+  } catch (error) { showError(error); }
+}
+
 function appendList(parent, heading, values) {
   if (!values || !values.length) return;
   const title = document.createElement('h4'); title.textContent = heading; parent.append(title);
@@ -452,6 +477,7 @@ function actionButton(card, action) {
     if (action.kind === 'prepare_publication') return preparePublication(run);
     if (action.kind === 'publish_publication' && publication) return publicationAction(publication, 'execute');
     if (action.kind === 'refresh_checks' && publication) return publicationAction(publication, 'refresh-checks');
+    if (['replay_publication','review_publication_replay','promote_publication_replay'].includes(action.kind)) return publicationRecoveryAction(card, action.kind);
     if (action.kind === 'open_pull_request' && action.url) window.open(action.url, '_blank', 'noopener,noreferrer');
   });
   return button;
@@ -532,6 +558,25 @@ function openDrawer(card) {
     const publicationSummary = document.createElement('p'); publicationSummary.textContent = publication.status + (publication.blockedReason ? '\n' + publication.blockedReason : '') + (publication.error ? '\n' + publication.error : ''); delivery.append(publicationSummary);
     appendList(delivery, 'Required checks', publication.requiredCheckNames);
     appendList(delivery, 'Observed checks', publication.checks.map((check) => check.name + ': ' + check.status + (check.conclusion ? ' / ' + check.conclusion : '')));
+  }
+  if (card.publicationRecovery) {
+    const recovery = drawerSection('Stale-base recovery');
+    const rebase = card.publicationRecovery.rebase; const replayReview = card.publicationRecovery.review;
+    const summary = document.createElement('p');
+    summary.textContent = rebase ? 'Replay: ' + rebase.status + (rebase.detail ? '\n' + rebase.detail : '') : 'Replay has not started.';
+    recovery.append(summary);
+    if (rebase) appendList(recovery, 'Replay evidence', [
+      'Model calls: 0',
+      'Changed paths: ' + rebase.replayedChangedPaths.length,
+      'Gates: ' + rebase.gates.filter((gate) => gate.status === 'passed').length + '/' + rebase.gates.length,
+      ...(rebase.blockReason ? ['Block reason: ' + rebase.blockReason] : []),
+    ]);
+    if (replayReview) appendList(recovery, 'Fresh review', [
+      'Status: ' + replayReview.status,
+      'Model calls: ' + replayReview.modelCalls,
+      ...(replayReview.report ? ['Verdict: ' + replayReview.report.verdict, replayReview.report.summary] : []),
+      ...(replayReview.blockReason ? ['Block reason: ' + replayReview.blockReason] : []),
+    ]);
   }
   const timeline = drawerSection('Audit timeline'); timeline.classList.add('timeline');
   for (const event of run.audit.slice().reverse()) { const item = document.createElement('div'); item.className = 'timeline-item'; item.textContent = event.type + ' · ' + event.actorId + ' · ' + new Date(event.createdAt).toLocaleString(); timeline.append(item); }
