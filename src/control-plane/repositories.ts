@@ -146,6 +146,73 @@ const enrolled = [
 			networkAccess: true,
 		},
 	},
+	{
+		id: 'frostyard/frostyard-org',
+		githubRepositoryId: 1302160246,
+		displayName: 'frostyard.org',
+		description: 'Public Frostyard website built with Astro for Cloudflare Workers',
+		defaultBranch: 'main',
+		enabled: true,
+		readOnly: false,
+		agentSurfaces: ['AGENTS.md', 'README.md', 'docs/agents/skills/', 'specs/'],
+		qualityGates: [
+			{ id: 'ci', name: 'Repository CI', command: 'npm run ci', kind: 'ci', mutatesWorkspace: false },
+		],
+		protectedBoundaries: [
+			{
+				id: 'automation-and-deployment',
+				paths: ['.github/**', 'astro.config.mjs', 'wrangler.jsonc'],
+				minimumRisk: 'high',
+				requiresHumanReview: true,
+			},
+		],
+		capabilities: {
+			read: true,
+			triage: true,
+			writeCode: true,
+			writeGitHub: true,
+			merge: false,
+		},
+		multiRepo: { coordinateWith: [] },
+		executionPolicy: {
+			enabled: true,
+			maxFiles: 10,
+			maxDiffLines: 700,
+			requiredGateIds: ['ci'],
+			workerTimeoutMinutes: 25,
+			gateTimeoutMinutes: 15,
+			workerNetwork: { mode: 'public_dependencies' },
+		},
+		multiWorkerPolicy: {
+			enabled: false,
+			maxConcurrentWorkers: 2,
+			maxWorkerAttempts: 8,
+			maxPreDispatchRetriesPerTask: 1,
+			maxRuntimeMinutes: 60,
+			subscriptionCalls: { openaiCodex: 4, githubCopilot: 2 },
+		},
+		reviewPolicy: {
+			enabled: true,
+			maxRemediationRounds: 1,
+			reviewerTimeoutMinutes: 15,
+			remediationTimeoutMinutes: 20,
+		},
+		publicationPolicy: {
+			enabled: true,
+			branchPrefix: 'bobsled/',
+			draftPullRequestsOnly: true,
+			allowForcePush: false,
+			requiredCheckNames: ['Workers Builds: frostyard-org'],
+			maxAttempts: 3,
+			maxTotalBlobBytes: 5 * 1024 * 1024,
+		},
+		workspacePreparation: {
+			name: 'Install locked dependencies',
+			command: 'npm ci',
+			timeoutMinutes: 15,
+			networkAccess: true,
+		},
+	},
 ] satisfies unknown[];
 
 export const repositories: readonly RepositoryContract[] = enrolled.map((entry) =>

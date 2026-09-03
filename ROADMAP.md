@@ -72,8 +72,10 @@ Issue-action evidence: the explicitly authorized temporary [Bobsled issue #17](h
 - [x] Exact-patch-bound, draft-only publication with deterministic Git objects and no force push.
 - [x] Five-lane operator board with card actions, evidence details, and documented lane criteria.
 - [x] Bounded authenticated-operator identity chip in the board header without exposing immutable IDs, roles, or session metadata.
-- [ ] Enable publication for one explicitly authorized non-test repository.
+- [x] Enable publication for one explicitly authorized non-test repository.
 - [ ] Live-prove draft branch/PR creation and observe required GitHub checks; human review and merge remain mandatory.
+
+Acceptance target: `frostyard/frostyard-org` snapshots its immutable repository identity, runs `npm ci` before execution, requires `npm run ci`, sends successful patches through automatic fresh-context review, and may publish only generated non-force draft branches. Cloudflare's `Workers Builds: frostyard-org` check is required before handoff. Automation/deployment configuration is protected, and Bobsled retains no merge or deployment capability.
 
 ### M4-R — Standalone public repository preparation — `DONE`
 
