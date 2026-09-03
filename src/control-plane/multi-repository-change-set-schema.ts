@@ -46,8 +46,22 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 			FOREIGN KEY(schedule_id) REFERENCES multi_repository_change_set_schedules(id),
 			FOREIGN KEY(run_id) REFERENCES runs(id), FOREIGN KEY(job_id) REFERENCES jobs(id)
 		);
+		CREATE TABLE IF NOT EXISTS multi_repository_member_preparation_leases (
+			id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, change_set_id TEXT NOT NULL,
+			repository_id TEXT NOT NULL, run_id TEXT NOT NULL, job_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL, request_sha256 TEXT NOT NULL, unit_sha256 TEXT NOT NULL,
+			policy_snapshot_sha256 TEXT NOT NULL, policy_snapshot_json TEXT NOT NULL,
+			reason TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+			UNIQUE(owner_id, idempotency_key), UNIQUE(schedule_id, repository_id),
+			FOREIGN KEY(schedule_id) REFERENCES multi_repository_change_set_schedules(id),
+			FOREIGN KEY(change_set_id) REFERENCES multi_repository_change_sets(id),
+			FOREIGN KEY(run_id) REFERENCES runs(id), FOREIGN KEY(job_id) REFERENCES jobs(id)
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS one_reserved_multi_repository_member_per_schedule
+			ON multi_repository_member_preparation_leases(schedule_id) WHERE status = 'reserved';
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (26, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (27, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (28, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (29, datetime('now'));
 	`);
 }
