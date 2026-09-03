@@ -6,6 +6,7 @@ import * as v from 'valibot';
 import { dataPath } from '../paths.ts';
 import { IntegrationWorkspaceResultSchema } from './integration-workspace-service.ts';
 import { IntegrationConflictResolutionResultSchema } from './integration-conflict-resolution-contracts.ts';
+import { IntegrationConflictPromotionResultSchema } from './integration-conflict-promotion-contracts.ts';
 import { MultiWorkerPlanV2Schema, WorkPlanTaskIdSchema } from './work-plan-contracts.ts';
 
 const Sha256Schema = v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/));
@@ -40,9 +41,19 @@ export const IntegrationConflictResolutionParentSchema = v.object({
 	createdAt: v.string(),
 });
 
+export const IntegrationConflictPromotionParentSchema = v.object({
+	assemblyId: v.pipe(v.string(), v.uuid()),
+	resolutionId: v.pipe(v.string(), v.uuid()),
+	ownerId: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
+	status: v.picklist(['promoted', 'blocked']),
+	result: IntegrationConflictPromotionResultSchema,
+	createdAt: v.string(),
+});
+
 export type MultiWorkerPlanParent = v.InferOutput<typeof MultiWorkerPlanParentSchema>;
 export type IntegrationAssemblyParent = v.InferOutput<typeof IntegrationAssemblyParentSchema>;
 export type IntegrationConflictResolutionParent = v.InferOutput<typeof IntegrationConflictResolutionParentSchema>;
+export type IntegrationConflictPromotionParent = v.InferOutput<typeof IntegrationConflictPromotionParentSchema>;
 
 export class MultiWorkerParentConflictError extends Error {}
 export class MultiWorkerParentForbiddenError extends Error {}
@@ -54,6 +65,10 @@ function canonical(value: unknown): unknown {
 		return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, canonical(item)]));
 	}
 	return value;
+}
+
+function sameList(left: readonly string[], right: readonly string[]): boolean {
+	return left.join('\0') === right.join('\0');
 }
 
 export function multiWorkerPlanDigest(plan: v.InferOutput<typeof MultiWorkerPlanV2Schema>): string {
@@ -80,8 +95,18 @@ export function ensureMultiWorkerParentSchema(db: Database.Database): void {
 			UNIQUE(source_assembly_id, strategy),
 			FOREIGN KEY(source_assembly_id) REFERENCES integration_assemblies(id)
 		);
+		CREATE TABLE IF NOT EXISTS integration_conflict_promotions (
+			id TEXT PRIMARY KEY, resolution_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+			status TEXT NOT NULL, result_json TEXT NOT NULL, assembly_json TEXT,
+			idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+			UNIQUE(owner_id, idempotency_key),
+			FOREIGN KEY(resolution_id) REFERENCES integration_conflict_resolutions(id)
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS one_promoted_assembly_per_resolution
+			ON integration_conflict_promotions(resolution_id) WHERE status = 'promoted';
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (15, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (16, datetime('now'));
 	`);
 }
 
@@ -143,6 +168,9 @@ export class MultiWorkerParentStore {
 			taskId: WorkPlanTaskIdSchema, result: IntegrationWorkspaceResultSchema,
 		}), input);
 		return this.#db.transaction(() => {
+			if (this.#db.prepare('SELECT id FROM integration_conflict_promotions WHERE id = ?').get(request.assemblyId)) {
+				throw new MultiWorkerParentConflictError('Assembly ID already belongs to conflict-promotion evidence');
+			}
 			const plan = this.getPlan(request.planId, ownerId);
 			const task = plan.plan.tasks.find(({ id, dependsOn }) => id === request.taskId && dependsOn.length > 0);
 			if (!task) throw new MultiWorkerParentConflictError('Assembly requires a dependency-bearing task in its parent plan');
@@ -168,6 +196,60 @@ export class MultiWorkerParentStore {
 				throw new MultiWorkerParentConflictError(`Assembly parent conflicts with existing evidence: ${error instanceof Error ? error.message : 'database constraint'}`);
 			}
 			return this.getAssembly(request.assemblyId, ownerId);
+		})();
+	}
+
+	recordConflictPromotion(input: unknown, ownerId: string, idempotencyKey: string): IntegrationConflictPromotionParent {
+		const request = v.parse(v.object({
+			assemblyId: v.pipe(v.string(), v.uuid()), resolutionId: v.pipe(v.string(), v.uuid()),
+			result: IntegrationConflictPromotionResultSchema,
+		}), input);
+		if (!idempotencyKey || idempotencyKey.length > 200) throw new Error('A bounded idempotency key is required');
+		const requestHash = createHash('sha256').update(JSON.stringify(canonical(request))).digest('hex');
+		return this.#db.transaction(() => {
+			const resolution = this.getConflictResolution(request.resolutionId, ownerId);
+			if (resolution.status !== 'resolved' || resolution.result.status !== 'resolved') {
+				throw new MultiWorkerParentConflictError('Conflict promotion requires resolved parent evidence');
+			}
+			if (request.result.assemblyId !== request.assemblyId || request.result.resolutionId !== request.resolutionId) {
+				throw new MultiWorkerParentConflictError('Conflict promotion result does not match its requested identities');
+			}
+			if (request.result.status === 'promoted') {
+				const assembly = request.result.assembly;
+				if (
+					request.result.inspection.headCommit !== resolution.result.baseCommit
+					|| request.result.inspection.stagedPatchSha256 !== resolution.result.patchSha256
+					|| request.result.inspection.dirtyPaths.length !== 0
+					|| assembly.status !== 'assembled' || assembly.assemblyId !== request.assemblyId
+					|| assembly.taskId !== resolution.result.taskId || assembly.baseCommit !== resolution.result.baseCommit
+					|| assembly.workspacePath !== resolution.result.workspacePath
+					|| assembly.patchSha256 !== resolution.result.patchSha256
+					|| !sameList(assembly.appliedTaskIds, resolution.result.appliedTaskIds)
+					|| !sameList(assembly.changedPaths, resolution.result.changedPaths)
+				) throw new MultiWorkerParentConflictError('Promoted assembly does not exactly match resolved conflict evidence');
+			}
+			const replay = this.#db.prepare('SELECT id, request_hash FROM integration_conflict_promotions WHERE owner_id = ? AND idempotency_key = ?')
+				.get(ownerId, idempotencyKey) as { id: string; request_hash: string } | undefined;
+			if (replay) {
+				if (replay.request_hash !== requestHash) throw new MultiWorkerParentConflictError('Idempotency key was used for different promotion evidence');
+				return this.getConflictPromotion(replay.id, ownerId);
+			}
+			if (this.#db.prepare('SELECT id FROM integration_assemblies WHERE id = ?').get(request.assemblyId)) {
+				throw new MultiWorkerParentConflictError('Promotion assembly ID already belongs to direct assembly evidence');
+			}
+			const timestamp = this.#now().toISOString();
+			try {
+				this.#db.prepare(`INSERT INTO integration_conflict_promotions
+					(id, resolution_id, owner_id, status, result_json, assembly_json, idempotency_key, request_hash, created_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+					request.assemblyId, request.resolutionId, ownerId, request.result.status,
+					JSON.stringify(request.result), request.result.status === 'promoted' ? JSON.stringify(request.result.assembly) : null,
+					idempotencyKey, requestHash, timestamp,
+				);
+			} catch (error) {
+				throw new MultiWorkerParentConflictError(`Conflict promotion conflicts with existing evidence: ${error instanceof Error ? error.message : 'database constraint'}`);
+			}
+			return this.getConflictPromotion(request.assemblyId, ownerId);
 		})();
 	}
 
@@ -245,6 +327,17 @@ export class MultiWorkerParentStore {
 		return v.parse(IntegrationConflictResolutionParentSchema, {
 			resolutionId: row.id, sourceAssemblyId: row.source_assembly_id, ownerId: row.owner_id,
 			strategy: row.strategy, status: row.status, result: JSON.parse(row.result_json as string), createdAt: row.created_at,
+		});
+	}
+
+	getConflictPromotion(assemblyId: string, ownerId: string): IntegrationConflictPromotionParent {
+		const row = this.#db.prepare('SELECT * FROM integration_conflict_promotions WHERE id = ?')
+			.get(assemblyId) as Record<string, unknown> | undefined;
+		if (!row) throw new MultiWorkerParentNotFoundError('Integration conflict promotion does not exist');
+		if (row.owner_id !== ownerId) throw new MultiWorkerParentForbiddenError('Integration conflict promotion belongs to another principal');
+		return v.parse(IntegrationConflictPromotionParentSchema, {
+			assemblyId: row.id, resolutionId: row.resolution_id, ownerId: row.owner_id,
+			status: row.status, result: JSON.parse(row.result_json as string), createdAt: row.created_at,
 		});
 	}
 }

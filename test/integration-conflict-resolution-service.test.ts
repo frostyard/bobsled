@@ -17,6 +17,9 @@ import {
 	MultiWorkerParentForbiddenError,
 	MultiWorkerParentStore,
 } from '../src/control-plane/multi-worker-parent-store.ts';
+import { IntegrationConflictPromotionService } from '../src/control-plane/integration-conflict-promotion-service.ts';
+import { IntegrationInvocationStore } from '../src/control-plane/integration-invocation-store.ts';
+import { getRepository } from '../src/control-plane/repositories.ts';
 
 function git(cwd: string, args: string[]): string {
 	return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -103,7 +106,7 @@ test('rejects non-conflict parents and changed patch evidence before creating a 
 	]), IntegrationConflictResolutionError);
 });
 
-test('persists one principal-scoped deterministic resolution per rejected assembly', async () => {
+test('persists conflict lineage and promotes only freshly verified resolved evidence', async () => {
 	const value = fixture();
 	const payloads = [patch(value.source, 4, 'task one', 'one'), patch(value.source, 6, 'task two', 'two')];
 	const assemblyPlan = plan(value.baseCommit, payloads);
@@ -121,14 +124,20 @@ test('persists one principal-scoped deterministic resolution per rejected assemb
 	database.exec(`
 		CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 		CREATE TABLE runs (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL);
-		CREATE TABLE jobs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, FOREIGN KEY(run_id) REFERENCES runs(id));
+		CREATE TABLE jobs (
+			id TEXT PRIMARY KEY, run_id TEXT NOT NULL, policy_snapshot_json TEXT NOT NULL,
+			work_item_snapshot_json TEXT NOT NULL, FOREIGN KEY(run_id) REFERENCES runs(id)
+		);
 	`);
 	database.prepare('INSERT INTO runs (id, owner_id) VALUES (?, ?)').run(runId, 'operator');
-	database.prepare('INSERT INTO jobs (id, run_id) VALUES (?, ?)').run(jobId, runId);
+	database.prepare('INSERT INTO jobs (id, run_id, policy_snapshot_json, work_item_snapshot_json) VALUES (?, ?, ?, ?)').run(
+		jobId, runId, JSON.stringify(getRepository('frostyard/clix')),
+		JSON.stringify({ source: 'manual', key: 'conflict-parent', title: 'Resolve stack', body: '', labels: [] }),
+	);
 	database.close();
 	const parents = new MultiWorkerParentStore(databasePath);
 	const planId = randomUUID();
-	parents.recordPlan({
+	const storedPlan = parents.recordPlan({
 		planId, jobId, baseCommit: value.baseCommit,
 		plan: {
 			version: 2, summary: 'Resolve dependent changes.', assumptions: [], risks: [],
@@ -149,10 +158,46 @@ test('persists one principal-scoped deterministic resolution per rejected assemb
 		resolutionId: duplicateStrategyId, sourceAssemblyId: rejected.assemblyId,
 		result: { ...result, resolutionId: duplicateStrategyId },
 	}, 'operator'), MultiWorkerParentConflictError);
+
+	const blockedPromotionId = randomUUID();
+	const blockedPromotion = await new IntegrationConflictPromotionService(parents, { inspector: async () => ({
+		headCommit: value.baseCommit, stagedPatchSha256: 'f'.repeat(64), dirtyPaths: [],
+	}) }).promote(blockedPromotionId, resolutionId, 'operator', 'blocked-promotion');
+	assert.equal(blockedPromotion.status, 'blocked');
+	assert.deepEqual(blockedPromotion.result.status === 'blocked' ? blockedPromotion.result.violations : [], ['index_changed']);
+	const promotedAssemblyId = randomUUID();
+	const promoted = await new IntegrationConflictPromotionService(parents)
+		.promote(promotedAssemblyId, resolutionId, 'operator', 'successful-promotion');
+	assert.equal(promoted.status, 'promoted');
+	assert.equal(promoted.result.modelCalls, 0);
+	assert.equal(promoted.result.workerAuthorized, false);
+	assert.equal((await new IntegrationConflictPromotionService(parents)
+		.promote(promotedAssemblyId, resolutionId, 'operator', 'successful-promotion')).assemblyId, promotedAssemblyId);
+	assert.throws(() => parents.getConflictPromotion(promotedAssemblyId, 'different-operator'), MultiWorkerParentForbiddenError);
+	await assert.rejects(() => new IntegrationConflictPromotionService(parents)
+		.promote(randomUUID(), resolutionId, 'operator', 'duplicate-success'), MultiWorkerParentConflictError);
 	parents.close();
 
 	const reopened = new MultiWorkerParentStore(databasePath);
 	try {
 		assert.equal(reopened.getConflictResolution(resolutionId, 'operator').result.workspacePath, result.workspacePath);
+		assert.equal(reopened.getConflictPromotion(promotedAssemblyId, 'operator').status, 'promoted');
 	} finally { reopened.close(); }
+
+	const invocations = new IntegrationInvocationStore(databasePath);
+	try {
+		assert.throws(() => invocations.reserve({
+			integrationAttemptId: randomUUID(), assemblyId: blockedPromotionId,
+			planSha256: storedPlan.planSha256, taskId: 'integration',
+		}, 'operator', 'blocked-promotion-invocation'));
+		const integrationAttemptId = randomUUID();
+		const lease = invocations.reserve({
+			integrationAttemptId, assemblyId: promotedAssemblyId,
+			planSha256: storedPlan.planSha256, taskId: 'integration',
+		}, 'operator', 'promoted-invocation');
+		assert.equal(lease.status, 'reserved');
+		const context = invocations.getParentContext(integrationAttemptId, 'operator');
+		assert.equal(context.workspacePath, result.workspacePath);
+		assert.equal(context.assemblyPatchSha256, result.status === 'resolved' ? result.patchSha256 : '');
+	} finally { invocations.close(); }
 });
