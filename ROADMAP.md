@@ -83,6 +83,8 @@ Post-acceptance hardening:
 
 - [x] Reconcile an externally closed or merged draft PR into durable publication and board state through the authenticated **Refresh status** action; closed PRs remain refreshable so reopening returns them to the correct delivery/check state.
 - [ ] When `main` advances cleanly after approval, reapply and revalidate the exact approved patch on the new base without another implementation-worker call; fail closed on conflicts or unverifiable context drift.
+  - [x] Persist a principal-scoped superseding replay, authenticate the old patch and new base, reapply it in a fresh worktree, and rerun current preparation/gates with zero model calls.
+  - [ ] Run a fresh read-only adversarial review against the new repository snapshot, then promote only approved replay evidence into a new immutable publication intent.
 
 ### M4-R — Standalone public repository preparation — `DONE`
 
