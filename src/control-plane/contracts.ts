@@ -34,6 +34,18 @@ export const ExecutionPolicySchema = v.object({
 	workerNetwork: WorkerNetworkPolicySchema,
 });
 
+export const MultiWorkerPolicySchema = v.object({
+	enabled: v.boolean(),
+	maxConcurrentWorkers: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(16)),
+	maxWorkerAttempts: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(128)),
+	maxPreDispatchRetriesPerTask: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(3)),
+	maxRuntimeMinutes: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(24 * 60)),
+	subscriptionCalls: v.object({
+		openaiCodex: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(128)),
+		githubCopilot: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(128)),
+	}),
+});
+
 const ExecutionPolicySnapshotSchema = v.object({
 	...ExecutionPolicySchema.entries,
 	workerNetwork: v.optional(WorkerNetworkPolicySchema),
@@ -61,6 +73,7 @@ export const RepositoryContractSchema = v.object({
 		coordinateWith: v.array(RepositoryIdSchema),
 	}),
 	executionPolicy: ExecutionPolicySchema,
+	multiWorkerPolicy: MultiWorkerPolicySchema,
 	reviewPolicy: v.object({
 		enabled: v.boolean(),
 		maxRemediationRounds: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(3)),
@@ -89,6 +102,7 @@ export const RepositoryPolicySnapshotSchema = v.object({
 	...RepositoryContractSchema.entries,
 	githubRepositoryId: v.optional(RepositoryContractSchema.entries.githubRepositoryId),
 	executionPolicy: v.optional(ExecutionPolicySnapshotSchema),
+	multiWorkerPolicy: v.optional(MultiWorkerPolicySchema),
 	reviewPolicy: v.optional(RepositoryContractSchema.entries.reviewPolicy),
 	publicationPolicy: v.optional(RepositoryContractSchema.entries.publicationPolicy),
 	workspacePreparation: v.optional(RepositoryContractSchema.entries.workspacePreparation),
