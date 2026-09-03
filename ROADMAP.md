@@ -176,7 +176,19 @@ Migration 37 adds the all-member linked-publication barrier without performing p
 
 Migration 38 consumes that barrier through one immutable linked-publication execution. Before any GitHub mutation, it admits every member into the existing exact-patch publication outbox and binds the generated publication identity, approved review, patch digest, deterministic branch, durable marker, and dependency rollout layer into one preflight manifest. Any non-pending intent blocks the whole execution with zero new external side effects. One atomic claim then grants the sole dependency-ordered rollout process; each member start is counted before invoking the existing draft-only, no-force publication service. Execution stops at the first failure, never advances dependent repositories, and records immutable `succeeded`, `partial`, `blocked`, or `failed` evidence. Ambiguous running work cannot be retried automatically. The outbox continues to enforce current scoped GitHub authority, exact patch bytes, deterministic commits, and marker-based reconciliation. Merge and deployment remain unauthorized; explicit partial-failure retry, supersession, and rollback are still separate work.
 
-### M7 — Organization-scale operations — `PLANNED`
+### M7 — Conversational intake — `NEXT`
+
+- Add durable, principal-owned intake conversations with bounded turns, idempotent submissions, optimistic concurrency, and explicit terminal states.
+- Pair the chat transcript with a live schema-validated brief containing the selected repository, objective, context, acceptance criteria, constraints, non-goals, assumptions, and unresolved questions.
+- Freeze each submitted brief as an immutable versioned snapshot with exact source-turn provenance and a canonical digest; corrections create a superseding snapshot instead of rewriting history.
+- Run fresh-context triage from the stored snapshot and persist the result against its exact digest; admission references trusted server-side records rather than browser-resubmitted work-item or triage content.
+- Keep repository selection, admission, execution, review recovery, and publication as separate explicit operator actions. The intake model receives no authority to select arbitrary repositories, mutate policy, dispatch workers, spend execution budgets, or perform GitHub writes.
+- Support manual prompts and GitHub issues as conversation seeds while treating all issue, repository, and user text as untrusted data. Any repository research remains bounded and read-only, with no shell, credential, network, or mutation capability.
+- Deliver the first slice for one enrolled repository. Multi-repository conversational planning remains deferred until a separate contract can map an operator-confirmed brief into the existing M6 authorization chain.
+
+Acceptance target: an authenticated operator can refine one ambiguous request through chat, inspect the evolving structured brief, freeze an immutable intake snapshot, and submit it to independent triage. Repeated or concurrent submissions converge without duplicate model calls or admissions; a finalized conversation cannot alter its snapshot; and no chat action can create a run, workspace, provider claim, branch, or pull request without the existing downstream authorization step.
+
+### M8 — Organization-scale operations — `PLANNED`
 
 - Scheduled and webhook-triggered maintenance.
 - Repository enrollment and policy drift detection.
