@@ -33,6 +33,14 @@ export function controlPlaneHtml(identity: ControlPlaneIdentity): string {
     .authority-status.within-policy { border-color:#6ee7b7; color:#8ff0c8; }
     .authority-status.exceeds-policy { border-color:#ff887a; color:#ff9b8f; }
     .grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,.8fr); gap:18px; }
+    .conversation-workspace { display:grid; grid-template-columns:minmax(280px,.8fr) minmax(320px,1.2fr); gap:16px; }
+    .chat-log { display:grid; gap:9px; max-height:420px; overflow:auto; margin:12px 0; }
+    .chat-turn { border:1px solid #343c36; border-left:3px solid #5fc8ff; background:#0d110f; padding:11px; white-space:pre-wrap; }
+    .chat-turn.assistant { border-left-color:#d5ff55; }
+    .chat-turn small { display:block; color:#8f9b90; margin-bottom:6px; text-transform:uppercase; }
+    .brief-block { border:1px solid #343c36; padding:11px; margin-bottom:9px; }
+    .brief-block strong { display:block; color:#d5ff55; margin-bottom:6px; }
+    .brief-block p,.brief-block ul { margin:0; white-space:pre-wrap; }
     .panel { border:1px solid #374039; background:rgba(20,25,22,.94); padding:20px; box-shadow:0 18px 60px #0006; }
     .ledger { margin-top:18px; }
     .board-panel { padding:0; overflow:hidden; }
@@ -118,7 +126,7 @@ export function controlPlaneHtml(identity: ControlPlaneIdentity): string {
     .badge { display:inline-block; border:1px solid #596658; padding:4px 7px; margin:0 6px 8px 0; font-size:.72rem; text-transform:uppercase; }
     .error { color:#ff887a; }
     footer { margin-top:18px; color:#778276; font-size:.72rem; }
-    @media(max-width:900px){ .grid{grid-template-columns:1fr} header{align-items:start;flex-direction:column}.header-context{justify-items:start} .board-heading{align-items:stretch;flex-direction:column}.board-filters{justify-content:stretch}.board-filters input{max-width:none}.board{grid-template-columns:repeat(5,82vw)} }
+    @media(max-width:900px){ .grid,.conversation-workspace{grid-template-columns:1fr} header{align-items:start;flex-direction:column}.header-context{justify-items:start} .board-heading{align-items:stretch;flex-direction:column}.board-filters{justify-content:stretch}.board-filters input{max-width:none}.board{grid-template-columns:repeat(5,82vw)} }
   </style>
 </head>
 <body>
@@ -134,7 +142,7 @@ export function controlPlaneHtml(identity: ControlPlaneIdentity): string {
       <form id="manual">
         <label>Manual task title<input id="title" maxlength="500" required placeholder="Describe one bounded change"></label>
         <label>Details<textarea id="body" maxlength="50000" placeholder="Context, desired behavior, constraints, acceptance criteria"></textarea></label>
-        <button id="submit">Dry-run triage</button>
+        <div class="toolbar"><button id="submit">Dry-run triage</button><button type="button" class="secondary" id="start-conversation">Refine in chat</button></div>
       </form>
     </section>
     <section class="panel" id="decision-panel">
@@ -142,6 +150,13 @@ export function controlPlaneHtml(identity: ControlPlaneIdentity): string {
       <div id="result" class="result"><span class="eyebrow">Select a fixture, issue, or enter a task.</span></div>
     </section>
   </div>
+  <section class="panel ledger" id="conversation-panel">
+    <div class="board-heading"><div><div class="eyebrow">Principal-owned · one repository</div><h2>Conversational intake</h2></div><div id="conversation-status" class="eyebrow">No active conversation</div></div>
+    <div class="conversation-workspace">
+      <div><div id="conversation-title" class="notice">Choose “Refine in chat” on a task or issue.</div><div id="chat-log" class="chat-log"></div><form id="chat-form"><label>Clarification or correction<textarea id="chat-message" maxlength="20000" placeholder="Add context, answer a question, or correct the live brief"></textarea></label><div class="toolbar"><button id="chat-submit">Revise brief once</button><button type="button" class="danger" id="chat-cancel">Cancel conversation</button></div></form></div>
+      <div><h2>Live structured brief</h2><div id="live-brief" class="result"><span class="eyebrow">The schema-valid brief will appear here.</span></div></div>
+    </div>
+  </section>
   <section class="panel ledger board-panel">
     <div class="board-heading"><div><div class="eyebrow">Durable run ledger</div><h2>Factory board</h2></div><div class="board-filters"><input id="board-search" type="search" placeholder="Search runs"><select id="board-repo"><option value="">All repositories</option></select><button class="secondary" id="refresh-runs">Refresh</button></div></div>
     <details class="board-guide"><summary>How lane assignment works</summary><div class="lane-guide-grid">
@@ -176,6 +191,13 @@ const drawerScrim = document.querySelector('#drawer-scrim');
 const drawerBody = document.querySelector('#drawer-body');
 const drawerActions = document.querySelector('#drawer-actions');
 const authorityStatus = document.querySelector('#authority-status');
+const conversationPanel = document.querySelector('#conversation-panel');
+const conversationStatus = document.querySelector('#conversation-status');
+const conversationTitle = document.querySelector('#conversation-title');
+const chatLog = document.querySelector('#chat-log');
+const liveBrief = document.querySelector('#live-brief');
+const chatSubmit = document.querySelector('#chat-submit');
+let activeConversation;
 let boardCards = [];
 let boardPoll;
 
@@ -215,10 +237,46 @@ function renderItems(values) {
     const card = document.createElement('article'); card.className = 'item';
     const title = document.createElement('strong'); title.textContent = workItem.title;
     const meta = document.createElement('small'); meta.textContent = workItem.key + ' · ' + workItem.source;
-    const action = document.createElement('button'); action.className = 'secondary'; action.textContent = 'Triage this';
-    action.addEventListener('click', () => triage(workItem));
-    card.append(title, meta, document.createElement('br'), document.createElement('br'), action); items.append(card);
+    const actions = document.createElement('div'); actions.className = 'toolbar';
+    const action = document.createElement('button'); action.className = 'secondary'; action.textContent = 'Triage this'; action.addEventListener('click', () => triage(workItem));
+    const converse = document.createElement('button'); converse.textContent = 'Refine in chat'; converse.addEventListener('click', () => startConversation(workItem));
+    actions.append(converse, action); card.append(title, meta, actions); items.append(card);
   }
+}
+
+function initialBrief(workItem) {
+  return {version:1,repositoryId:repo.value,objective:workItem.title,context:workItem.body.trim()?[workItem.body.trim()]:[],acceptanceCriteria:[],constraints:[],nonGoals:[],assumptions:[],unresolvedQuestions:['What should be true when this work is complete?']};
+}
+
+function appendBriefBlock(label, value) {
+  const block = document.createElement('div'); block.className = 'brief-block'; const title = document.createElement('strong'); title.textContent = label; block.append(title);
+  if (Array.isArray(value)) { const list = document.createElement('ul'); for (const item of value) { const row = document.createElement('li'); row.textContent = item; list.append(row); } if (!value.length) { const row = document.createElement('li'); row.textContent = 'None yet'; list.append(row); } block.append(list); }
+  else { const body = document.createElement('p'); body.textContent = value; block.append(body); }
+  liveBrief.append(block);
+}
+
+function renderConversation(conversation, revision, shouldScroll=true) {
+  activeConversation = conversation; conversationStatus.textContent = revision ? 'revision ' + revision.status + ' · conversation version ' + conversation.version : conversation.status + ' · version ' + conversation.version; conversationTitle.textContent = conversation.seed.title; chatLog.textContent = ''; liveBrief.textContent = '';
+  if (!conversation.turns.length) { const empty = document.createElement('div'); empty.className = 'eyebrow'; empty.textContent = 'Brief initialized. Add the first clarification below.'; chatLog.append(empty); }
+  for (const turn of conversation.turns) { const node = document.createElement('div'); node.className = 'chat-turn ' + turn.role; const role = document.createElement('small'); role.textContent = turn.role + ' · turn ' + turn.sequence; const text = document.createElement('div'); text.textContent = turn.text; node.append(role,text); chatLog.append(node); }
+  const brief = conversation.currentBrief; appendBriefBlock('Objective',brief.objective); appendBriefBlock('Context',brief.context); appendBriefBlock('Acceptance criteria',brief.acceptanceCriteria); appendBriefBlock('Constraints',brief.constraints); appendBriefBlock('Non-goals',brief.nonGoals); appendBriefBlock('Assumptions',brief.assumptions); appendBriefBlock('Unresolved questions',brief.unresolvedQuestions);
+  if (revision && revision.status === 'failed') { const failure=document.createElement('div');failure.className='error';failure.textContent=revision.error||'The claimed revision failed.';chatLog.append(failure); }
+  const busy = revision && ['reserved','running'].includes(revision.status); const active = conversation.status === 'active' && !busy; chatSubmit.disabled = !active; document.querySelector('#chat-message').disabled = !active; document.querySelector('#chat-cancel').disabled = !active; if(shouldScroll)conversationPanel.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+async function startConversation(workItem) {
+  try { renderConversation(await json('/api/intake-conversations',{method:'POST',headers:{'content-type':'application/json','idempotency-key':browserUuid()},body:JSON.stringify({repositoryId:repo.value,seed:workItem,brief:initialBrief(workItem)})})); }
+  catch(error){showError(error);}
+}
+
+async function reviseConversation(message) {
+  if (!activeConversation) return; chatSubmit.disabled = true; conversationStatus.textContent = 'Codex is revising the brief once…';
+  try { const payload=await json('/api/intake-conversations/'+activeConversation.id+'/revisions',{method:'POST',headers:{'content-type':'application/json','idempotency-key':browserUuid()},body:JSON.stringify({expectedVersion:activeConversation.version,message})}); renderConversation(payload.conversation,payload.revision); if(payload.revision.status==='failed')throw new Error(payload.revision.error||'Brief revision failed'); if(payload.revision.status==='succeeded')document.querySelector('#chat-message').value=''; }
+  catch(error){conversationStatus.textContent='Revision needs attention';showError(error);chatSubmit.disabled=false;}
+}
+
+async function loadLatestConversation() {
+  const conversations=await json('/api/intake-conversations'); const latest=conversations.find((conversation)=>conversation.status==='active')||conversations[0]; if(latest){const revisions=await json('/api/intake-conversations/'+latest.id+'/revisions');renderConversation(latest,revisions.at(-1),false);}
 }
 
 function renderDecision(payload, workItem) {
@@ -654,6 +712,9 @@ document.querySelector('#manual').addEventListener('submit', (event) => {
   event.preventDefault();
   triage({source:'manual', key:'manual:' + browserUuid(), title:document.querySelector('#title').value, body:document.querySelector('#body').value, labels:[]});
 });
+document.querySelector('#start-conversation').addEventListener('click',()=>{const form=document.querySelector('#manual');if(!form.reportValidity())return;startConversation({source:'manual',key:'manual:'+browserUuid(),title:document.querySelector('#title').value,body:document.querySelector('#body').value,labels:[]});});
+document.querySelector('#chat-form').addEventListener('submit',(event)=>{event.preventDefault();const message=document.querySelector('#chat-message').value.trim();if(message)reviseConversation(message);});
+document.querySelector('#chat-cancel').addEventListener('click',async()=>{if(!activeConversation)return;const reason=window.prompt('Cancellation reason (recorded durably):','Operator chose to stop refining this brief.');if(!reason)return;try{renderConversation(await json('/api/intake-conversations/'+activeConversation.id+'/cancel',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:activeConversation.version,reason})}));}catch(error){showError(error);}});
 document.querySelector('#refresh-runs').addEventListener('click', loadRuns);
 boardSearch.addEventListener('input', renderRuns);
 boardRepo.addEventListener('change', renderRuns);
@@ -668,7 +729,7 @@ try {
     const filterOption = document.createElement('option'); filterOption.value = value.id; filterOption.textContent = value.displayName + ' · ' + value.id; boardRepo.append(filterOption);
   }
   document.querySelector('#fixtures').click();
-  await Promise.all([loadRuns(), loadAuthority()]);
+  await Promise.all([loadRuns(), loadAuthority(), loadLatestConversation()]);
 } catch (error) { showError(error); }
 </script>
 </body>

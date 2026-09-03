@@ -76,6 +76,9 @@ test('serves the local factory interface', async () => {
 	assert.match(html, /Admit for human approval/);
 	assert.match(html, /RUN ADMITTED · AWAITING HUMAN APPROVAL/);
 	assert.match(html, /Factory board/);
+	assert.match(html, /Conversational intake/);
+	assert.match(html, /Live structured brief/);
+	assert.match(html, /Revise brief once/);
 	assert.match(html, /How lane assignment works/);
 	assert.match(html, /Admitted run is pending authorization/);
 	assert.match(html, /data-lane="attention"/);
@@ -98,6 +101,18 @@ test('serves a typed operator board projection', async () => {
 	const board = await response.json() as { generatedAt?: string; cards?: unknown[] };
 	assert.equal(typeof board.generatedAt, 'string');
 	assert.equal(Array.isArray(board.cards), true);
+});
+
+test('serves principal-owned conversational intake without implicit model authority', async () => {
+	const key = `app-conversation-${crypto.randomUUID()}`;
+	const seed = { source:'manual', key, title:'Clarify one bounded website task', body:'Preserve the existing layout.', labels:[] };
+	const brief = { version:1, repositoryId:'frostyard/frostyard-org', objective:seed.title, context:[seed.body], acceptanceCriteria:[], constraints:[], nonGoals:[], assumptions:[], unresolvedQuestions:['What outcome is required?'] };
+	const createdResponse = await app.request('/api/intake-conversations',{method:'POST',headers:{'content-type':'application/json','idempotency-key':key},body:JSON.stringify({repositoryId:brief.repositoryId,seed,brief})});
+	assert.equal(createdResponse.status,201);const created=await createdResponse.json() as {id:string;version:number;intakeModelCallAuthorized:boolean;runAdmissionAuthorized:boolean;githubMutationAuthorized:boolean};assert.equal(created.version,1);assert.equal(created.intakeModelCallAuthorized,false);assert.equal(created.runAdmissionAuthorized,false);assert.equal(created.githubMutationAuthorized,false);
+	assert.equal((await app.request(`/api/intake-conversations/${created.id}`)).status,200);const listed=await (await app.request('/api/intake-conversations')).json() as Array<{id:string}>;assert.equal(listed.some(({id})=>id===created.id),true);
+	assert.deepEqual(await (await app.request(`/api/intake-conversations/${created.id}/revisions`)).json(),[]);
+	const missingKey=await app.request(`/api/intake-conversations/${created.id}/revisions`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:1,message:'Clarify the audience.'})});assert.equal(missingKey.status,409);
+	const cancelled=await app.request(`/api/intake-conversations/${created.id}/cancel`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:1,reason:'Operator stopped this application-route test.'})});assert.equal(cancelled.status,200);assert.equal((await cancelled.json() as {status:string}).status,'cancelled');
 });
 
 test('creates RFC 4122 UUIDs when randomUUID is unavailable over private HTTP', async () => {
@@ -202,6 +217,7 @@ test('GitHub mode exposes only the bounded unauthenticated ingress paths', async
 		assert.equal((await app.request('https://factory.example/api/github-app/authority')).status, 401);
 		assert.equal((await app.request('https://factory.example/api/observability/status')).status, 401);
 		assert.equal((await app.request('https://factory.example/api/operator-board')).status, 401);
+		assert.equal((await app.request('https://factory.example/api/intake-conversations')).status, 401);
 		assert.equal((await app.request('https://factory.example/api/publication-recoveries/replays', { method: 'POST' })).status, 401);
 		assert.equal((await app.request('https://factory.example/api/publication-recoveries/resolutions', { method: 'POST' })).status, 401);
 	});

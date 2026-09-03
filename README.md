@@ -18,6 +18,8 @@ M6 begins with a versioned multi-repository change-set contract. It records repo
 
 M7 begins with a durable conversational-intake envelope. Migration 41 stores one explicitly selected enrolled repository, a bounded manual or GitHub-issue seed, a live schema-validated brief, and an immutable sequence of principal-owned operator/assistant turns. Migration 42 adds an atomic one-use revision claim: reserving a revision appends the operator turn, one native Codex call may return only a schema-valid brief and response, and settlement appends immutable assistant evidence. Creation and revision submission are idempotent, turn updates use optimistic concurrency, repository identity cannot drift, and cancellation is terminal. The intake agent has no sandbox or repository tools and grants no run admission, GitHub mutation, or repository research authority.
 
+Authenticated operators can start or resume conversational intake from either a manual task or an enrolled GitHub issue. The UI renders the immutable turn history beside the current structured brief and exposes explicit revise/cancel actions. Reads show durable in-flight or failed revision state; refreshing the page does not dispatch a model call. Final snapshot creation, fresh triage, and admission remain later explicit actions.
+
 See [ROADMAP.md](./ROADMAP.md) for durable milestone status and [docs/architecture.md](./docs/architecture.md) for the control-plane design, including multi-repository change sets.
 
 ## Requirements

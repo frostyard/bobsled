@@ -28,6 +28,9 @@ import {
 } from './control-plane/ledger.ts';
 import { getRepository, repositories } from './control-plane/repositories.ts';
 import { triageWorkItem } from './control-plane/triage-service.ts';
+import { IntakeConversationConflictError, IntakeConversationForbiddenError, IntakeConversationNotFoundError, IntakeConversationStore } from './control-plane/intake-conversation-store.ts';
+import { IntakeConversationRevisionConflictError, IntakeConversationRevisionForbiddenError, IntakeConversationRevisionNotFoundError, IntakeConversationRevisionStore } from './control-plane/intake-conversation-revision-store.ts';
+import { IntakeConversationRevisionService } from './control-plane/intake-conversation-revision-service.ts';
 import { controlPlaneHtml } from './control-plane/ui.ts';
 import { projectOperatorBoard } from './control-plane/operator-board-view.ts';
 import { MultiWorkerOperatorStore } from './control-plane/multi-worker-operator-view.ts';
@@ -76,6 +79,9 @@ const app = new Hono<{ Variables: { principal: OperatorPrincipal | typeof localP
 const localPrincipal = { id: 'local-operator' } as const;
 const sessionCookie = '__Host-bobsled-session';
 const oauthStateCookie = '__Host-bobsled-oauth-state';
+const intakeConversations = new IntakeConversationStore();
+const intakeRevisions = new IntakeConversationRevisionStore(undefined, undefined, intakeConversations);
+const intakeRevisionService = new IntakeConversationRevisionService(intakeRevisions);
 
 app.use('*', async (context, next) => {
 	const publicPath = context.req.path === '/health' ||
@@ -122,6 +128,14 @@ function githubActionError(context: Parameters<Parameters<typeof app.onError>[0]
 	if (error instanceof GitHubActionConflictError) return context.json({ error: message }, 409);
 	if (error instanceof GitHubInstallationConfigurationError) return context.json({ error: message }, 503);
 	if (error instanceof GitHubActionUpstreamError) return context.json({ error: message }, 502);
+	return context.json({ error: message }, 400);
+}
+
+function intakeConversationError(context: Parameters<Parameters<typeof app.onError>[0]>[1], error: unknown) {
+	const message = error instanceof Error ? error.message : 'Conversational intake failed';
+	if (error instanceof IntakeConversationNotFoundError || error instanceof IntakeConversationRevisionNotFoundError) return context.json({ error: message }, 404);
+	if (error instanceof IntakeConversationForbiddenError || error instanceof IntakeConversationRevisionForbiddenError) return context.json({ error: message }, 403);
+	if (error instanceof IntakeConversationConflictError || error instanceof IntakeConversationRevisionConflictError) return context.json({ error: message }, 409);
 	return context.json({ error: message }, 400);
 }
 
@@ -263,6 +277,38 @@ app.post('/api/triage', async (context) => {
 	} catch (error) {
 		return context.json({ error: error instanceof Error ? error.message : 'Triage failed' }, 400);
 	}
+});
+
+app.get('/api/intake-conversations', (context) => context.json(intakeConversations.list(context.get('principal'))));
+
+app.post('/api/intake-conversations', async (context) => {
+	try {
+		return context.json(intakeConversations.create(await context.req.json(), context.get('principal'), context.req.header('idempotency-key') ?? ''), 201);
+	} catch (error) { return intakeConversationError(context, error); }
+});
+
+app.get('/api/intake-conversations/:conversationId', (context) => {
+	try { return context.json(intakeConversations.get(context.req.param('conversationId'), context.get('principal'))); }
+	catch (error) { return intakeConversationError(context, error); }
+});
+
+app.get('/api/intake-conversations/:conversationId/revisions', (context) => {
+	try { return context.json(intakeRevisions.list(context.req.param('conversationId'), context.get('principal'))); }
+	catch (error) { return intakeConversationError(context, error); }
+});
+
+app.post('/api/intake-conversations/:conversationId/revisions', async (context) => {
+	try {
+		const body = await context.req.json() as { expectedVersion?: unknown; message?: unknown };
+		const revision = intakeRevisions.reserve({conversationId:context.req.param('conversationId'),expectedVersion:body.expectedVersion,message:body.message,reason:'Operator explicitly requested one conversational brief revision.'}, context.get('principal'), context.req.header('idempotency-key') ?? '');
+		const settled = await intakeRevisionService.run(revision.id, context.get('principal'));
+		return context.json({ revision:settled, conversation:intakeConversations.get(revision.conversationId, context.get('principal')) }, 201);
+	} catch (error) { return intakeConversationError(context, error); }
+});
+
+app.post('/api/intake-conversations/:conversationId/cancel', async (context) => {
+	try { return context.json(intakeConversations.cancel(context.req.param('conversationId'), await context.req.json(), context.get('principal'))); }
+	catch (error) { return intakeConversationError(context, error); }
 });
 
 app.get('/api/runs', (context) => context.json(jobLedger.list(context.get('principal'))));
