@@ -78,7 +78,7 @@ Routes:
 - `POST /api/runs/:runId/review` (recovery surface; eligible changed runs enter review automatically)
 - `GET/POST /api/publications`
 - `POST /api/publications/:publicationId/execute` (policy- and App-gated draft-only publication)
-- `POST /api/publications/:publicationId/refresh-checks`
+- `POST /api/publications/:publicationId/refresh-checks` (reconciles exact PR lifecycle before required checks; retained route name)
 - `GET /api/github-app/status`
 - `POST /channels/github/webhook` (the `@flue/github` channel; unavailable until its protected secret is configured)
 - `GET/POST /api/github-actions` and `GET /api/github-actions/:actionId`
@@ -153,7 +153,7 @@ Workers classify results as `changed`, `no_change`, or `blocked`. Trusted eviden
 
 M4-A review records live beside the preserved implementation evidence. Copilot receives a bounded evidence bundle without a sandbox; it cannot alter the patch under review. A changes-requested verdict may dispatch one Codex remediation round. Trusted code then recomputes the patch, reruns clix's required `docs` and `verify` gates, and sends passing remediation to a new Copilot conversation for a final verdict. Review approval still grants no publication capability.
 
-M4-B publication is a separate durable outbox. Admission recomputes the preserved patch and binds its digest, approved review, base commit, generated branch, draft-only PR body marker, and required checks. Execution re-verifies those bytes before any token mint, uses repository-scoped Git Data and pull-request permissions, never force-pushes, and reconciles retries only against the exact deterministic commit. Check polling uses a separate read profile and can reach only `ready_for_human`; Bobsled has no merge operation. clix's publication policy remains disabled, while `frostyard/frostyard-org` requires the Cloudflare Workers build before handoff.
+M4-B publication is a separate durable outbox. Admission recomputes the preserved patch and binds its digest, approved review, base commit, generated branch, draft-only PR body marker, and required checks. Execution re-verifies those bytes before any token mint, uses repository-scoped Git Data and pull-request permissions, never force-pushes, and reconciles retries only against the exact deterministic commit. Separate read profiles reconcile the exact pull-request lifecycle and required checks; merged or closed PRs become durable History state, while reopened PRs return to their current check state. Bobsled has no merge operation. clix's publication policy remains disabled, while `frostyard/frostyard-org` requires the Cloudflare Workers build before handoff.
 
 `@flue/github` owns webhook content-type checks, exact-byte HMAC verification, native GitHub event typing, ping acknowledgement, and the conventional channel route. Bobsled's trusted wrapper retains the bounded exact body and durably claims the verified delivery before any later dispatch. The channel does not receive a global outbound token and currently dispatches no agent.
 

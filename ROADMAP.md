@@ -81,7 +81,7 @@ Live acceptance evidence: Bobsled triaged, implemented, gated, independently app
 
 Post-acceptance hardening:
 
-- [ ] Reconcile an externally closed or merged draft PR into durable publication and board state instead of leaving it at `ready_for_human`.
+- [x] Reconcile an externally closed or merged draft PR into durable publication and board state through the authenticated **Refresh status** action; closed PRs remain refreshable so reopening returns them to the correct delivery/check state.
 - [ ] When `main` advances cleanly after approval, reapply and revalidate the exact approved patch on the new base without another implementation-worker call; fail closed on conflicts or unverifiable context drift.
 
 ### M4-R — Standalone public repository preparation — `DONE`
