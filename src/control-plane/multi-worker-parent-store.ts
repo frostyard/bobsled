@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import * as v from 'valibot';
 import { dataPath } from '../paths.ts';
 import { IntegrationWorkspaceResultSchema } from './integration-workspace-service.ts';
+import { IntegrationConflictResolutionResultSchema } from './integration-conflict-resolution-contracts.ts';
 import { MultiWorkerPlanV2Schema, WorkPlanTaskIdSchema } from './work-plan-contracts.ts';
 
 const Sha256Schema = v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/));
@@ -29,8 +30,19 @@ export const IntegrationAssemblyParentSchema = v.object({
 	createdAt: v.string(),
 });
 
+export const IntegrationConflictResolutionParentSchema = v.object({
+	resolutionId: v.pipe(v.string(), v.uuid()),
+	sourceAssemblyId: v.pipe(v.string(), v.uuid()),
+	ownerId: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
+	strategy: v.literal('git_three_way'),
+	status: v.picklist(['resolved', 'blocked']),
+	result: IntegrationConflictResolutionResultSchema,
+	createdAt: v.string(),
+});
+
 export type MultiWorkerPlanParent = v.InferOutput<typeof MultiWorkerPlanParentSchema>;
 export type IntegrationAssemblyParent = v.InferOutput<typeof IntegrationAssemblyParentSchema>;
+export type IntegrationConflictResolutionParent = v.InferOutput<typeof IntegrationConflictResolutionParentSchema>;
 
 export class MultiWorkerParentConflictError extends Error {}
 export class MultiWorkerParentForbiddenError extends Error {}
@@ -62,7 +74,14 @@ export function ensureMultiWorkerParentSchema(db: Database.Database): void {
 			result_json TEXT NOT NULL, created_at TEXT NOT NULL,
 			UNIQUE(plan_id, task_id), FOREIGN KEY(plan_id) REFERENCES multi_worker_plans(id)
 		);
+		CREATE TABLE IF NOT EXISTS integration_conflict_resolutions (
+			id TEXT PRIMARY KEY, source_assembly_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+			strategy TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+			UNIQUE(source_assembly_id, strategy),
+			FOREIGN KEY(source_assembly_id) REFERENCES integration_assemblies(id)
+		);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (15, datetime('now'));
 	`);
 }
 
@@ -152,6 +171,50 @@ export class MultiWorkerParentStore {
 		})();
 	}
 
+	recordConflictResolution(input: unknown, ownerId: string): IntegrationConflictResolutionParent {
+		const request = v.parse(v.object({
+			resolutionId: v.pipe(v.string(), v.uuid()),
+			sourceAssemblyId: v.pipe(v.string(), v.uuid()),
+			result: IntegrationConflictResolutionResultSchema,
+		}), input);
+		return this.#db.transaction(() => {
+			const source = this.getAssembly(request.sourceAssemblyId, ownerId);
+			if (source.result.status !== 'blocked' || source.result.reason !== 'patch_rejected' || !source.result.failedTaskId) {
+				throw new MultiWorkerParentConflictError('Conflict resolution requires a patch-rejected assembly parent');
+			}
+			if (
+				request.result.resolutionId !== request.resolutionId
+				|| request.result.sourceAssemblyId !== request.sourceAssemblyId
+				|| request.result.taskId !== source.taskId
+				|| request.result.baseCommit !== source.result.baseCommit
+			) throw new MultiWorkerParentConflictError('Conflict resolution result does not match its durable assembly parent');
+			if (request.result.workspacePath === source.result.workspacePath) {
+				throw new MultiWorkerParentConflictError('Conflict resolution must preserve the rejected workspace and use a separate destination');
+			}
+			const replay = this.#db.prepare('SELECT source_assembly_id, owner_id, result_json FROM integration_conflict_resolutions WHERE id = ?')
+				.get(request.resolutionId) as { source_assembly_id: string; owner_id: string; result_json: string } | undefined;
+			if (replay) {
+				if (
+					replay.source_assembly_id !== request.sourceAssemblyId || replay.owner_id !== ownerId
+					|| JSON.stringify(canonical(JSON.parse(replay.result_json))) !== JSON.stringify(canonical(request.result))
+				) throw new MultiWorkerParentConflictError('Resolution ID was used for different evidence');
+				return this.getConflictResolution(request.resolutionId, ownerId);
+			}
+			const timestamp = this.#now().toISOString();
+			try {
+				this.#db.prepare(`INSERT INTO integration_conflict_resolutions
+					(id, source_assembly_id, owner_id, strategy, status, result_json, created_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+					request.resolutionId, request.sourceAssemblyId, ownerId, request.result.strategy,
+					request.result.status, JSON.stringify(request.result), timestamp,
+				);
+			} catch (error) {
+				throw new MultiWorkerParentConflictError(`Conflict resolution conflicts with existing evidence: ${error instanceof Error ? error.message : 'database constraint'}`);
+			}
+			return this.getConflictResolution(request.resolutionId, ownerId);
+		})();
+	}
+
 	getPlan(planId: string, ownerId: string): MultiWorkerPlanParent {
 		const row = this.#db.prepare('SELECT * FROM multi_worker_plans WHERE id = ?').get(planId) as Record<string, unknown> | undefined;
 		if (!row) throw new MultiWorkerParentNotFoundError('Multi-worker plan does not exist');
@@ -171,6 +234,17 @@ export class MultiWorkerParentStore {
 		return v.parse(IntegrationAssemblyParentSchema, {
 			assemblyId: row.id, planId: row.plan_id, taskId: row.task_id, status: row.status,
 			result: JSON.parse(row.result_json as string), createdAt: row.created_at,
+		});
+	}
+
+	getConflictResolution(resolutionId: string, ownerId: string): IntegrationConflictResolutionParent {
+		const row = this.#db.prepare('SELECT * FROM integration_conflict_resolutions WHERE id = ?')
+			.get(resolutionId) as Record<string, unknown> | undefined;
+		if (!row) throw new MultiWorkerParentNotFoundError('Integration conflict resolution does not exist');
+		if (row.owner_id !== ownerId) throw new MultiWorkerParentForbiddenError('Integration conflict resolution belongs to another principal');
+		return v.parse(IntegrationConflictResolutionParentSchema, {
+			resolutionId: row.id, sourceAssemblyId: row.source_assembly_id, ownerId: row.owner_id,
+			strategy: row.strategy, status: row.status, result: JSON.parse(row.result_json as string), createdAt: row.created_at,
 		});
 	}
 }
