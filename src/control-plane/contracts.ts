@@ -46,6 +46,28 @@ export const MultiWorkerPolicySchema = v.object({
 	}),
 });
 
+export const CompatibilityGateSchema = v.object({
+	id: v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9._-]*$/), v.maxLength(100)),
+	name: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
+	dependencyRepositoryId: RepositoryIdSchema,
+	command: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
+	timeoutMinutes: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(60)),
+	mutatesWorkspace: v.literal(false),
+	networkAccess: v.literal(false),
+});
+
+const MultiRepositoryPolicyObjectSchema = v.object({
+	coordinateWith: v.array(RepositoryIdSchema),
+	compatibilityGates: v.optional(v.pipe(v.array(CompatibilityGateSchema), v.maxLength(50))),
+});
+
+export const MultiRepositoryPolicySchema = v.pipe(
+	MultiRepositoryPolicyObjectSchema,
+	v.check((policy) => new Set(policy.coordinateWith).size === policy.coordinateWith.length, 'Coordinated repository IDs must be unique'),
+	v.check((policy) => new Set((policy.compatibilityGates ?? []).map(({ id }) => id)).size === (policy.compatibilityGates ?? []).length, 'Compatibility gate IDs must be unique'),
+	v.check((policy) => (policy.compatibilityGates ?? []).every(({ dependencyRepositoryId }) => policy.coordinateWith.includes(dependencyRepositoryId)), 'Every compatibility gate dependency must be an allowed coordinated repository'),
+);
+
 const ExecutionPolicySnapshotSchema = v.object({
 	...ExecutionPolicySchema.entries,
 	workerNetwork: v.optional(WorkerNetworkPolicySchema),
@@ -69,9 +91,7 @@ export const RepositoryContractSchema = v.object({
 		writeGitHub: v.boolean(),
 		merge: v.literal(false),
 	}),
-	multiRepo: v.object({
-		coordinateWith: v.array(RepositoryIdSchema),
-	}),
+	multiRepo: MultiRepositoryPolicySchema,
 	executionPolicy: ExecutionPolicySchema,
 	multiWorkerPolicy: MultiWorkerPolicySchema,
 	reviewPolicy: v.object({
@@ -102,6 +122,10 @@ export const RepositoryPolicySnapshotSchema = v.object({
 	...RepositoryContractSchema.entries,
 	githubRepositoryId: v.optional(RepositoryContractSchema.entries.githubRepositoryId),
 	executionPolicy: v.optional(ExecutionPolicySnapshotSchema),
+	multiRepo: v.object({
+		coordinateWith: v.array(RepositoryIdSchema),
+		compatibilityGates: v.optional(v.array(CompatibilityGateSchema)),
+	}),
 	multiWorkerPolicy: v.optional(MultiWorkerPolicySchema),
 	reviewPolicy: v.optional(RepositoryContractSchema.entries.reviewPolicy),
 	publicationPolicy: v.optional(RepositoryContractSchema.entries.publicationPolicy),
@@ -182,6 +206,7 @@ export const TriageApiRequestSchema = v.object({
 
 export type RepositoryContract = v.InferOutput<typeof RepositoryContractSchema>;
 export type RepositoryPolicySnapshot = v.InferOutput<typeof RepositoryPolicySnapshotSchema>;
+export type CompatibilityGate = v.InferOutput<typeof CompatibilityGateSchema>;
 export type WorkerNetworkPolicy = v.InferOutput<typeof WorkerNetworkPolicySchema>;
 export type WorkItem = v.InferOutput<typeof WorkItemSchema>;
 export type TriageDecision = v.InferOutput<typeof TriageDecisionSchema>;
