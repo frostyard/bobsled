@@ -14,6 +14,8 @@ M2 adds a durable, separately migratable job ledger, Flue-native verified/dedupl
 
 M3 adds explicit `Go fix this` authorization, disposable implementation worktrees, repository preparation/gates, and durable draft evidence. M4-A adds fresh-context Copilot review, at most one Codex remediation round, gate reruns, and a final independent verdict. M4-B adds exact-patch-bound, draft-only publication and required-check tracking in trusted code. Publication remains capability-blocked for clix; the website acceptance target may publish only generated, non-force draft branches after approval.
 
+M6 begins with a versioned multi-repository change-set contract. It records repository-scoped objectives, dependency and compatibility edges, and deterministic dependency-first layers. Every participating repository pair must mutually opt in through enrollment policy. This planning projection grants no job, workspace, model, branch, publication, rollout, or merge authority.
+
 See [ROADMAP.md](./ROADMAP.md) for durable milestone status and [docs/architecture.md](./docs/architecture.md) for the control-plane design, including multi-repository change sets.
 
 ## Requirements

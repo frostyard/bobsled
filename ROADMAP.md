@@ -137,14 +137,16 @@ The dependency-ready scheduler now projects the immutable plan and budget ledger
 
 The authenticated operator board now joins each run through its owned job to the latest immutable multi-worker plan and read-only budget ledger. Cards show active workers, task completion, attempts, provider-call use, deadline, dependency blocks, and exhausted-budget reasons; active work projects into `Working`, while terminal exhaustion projects into `Attention`. The projection opens a short-lived read-only SQLite connection, never calls the scheduler, never reserves an attempt or provider slot, and always reports execution and dispatch authorization as false. Historical plan snapshots without multi-worker policy fail closed instead of blanking the board. Current repository policies still keep actual fan-out disabled.
 
-### M6 — Multi-repository change sets — `PLANNED`
+### M6 — Multi-repository change sets — `ACTIVE`
 
-- Add a typed repository dependency graph and cross-repository change-set record.
-- Plan version/API compatibility and rollout order across repositories.
-- Maintain one isolated job, policy snapshot, gate set, branch, and PR per repository.
-- Add cross-repository verification and a human-readable rollout/rollback plan.
-- Publish linked draft PRs only after every required repository reaches a publishable state.
-- Expose partial failure, retry, supersession, and rollback explicitly.
+- [x] Add a typed repository dependency graph and cross-repository change-set record.
+- [x] Plan version/API compatibility and rollout order across repositories.
+- [ ] Maintain one isolated job, policy snapshot, gate set, branch, and PR per repository.
+- [ ] Add cross-repository verification and a human-readable rollout/rollback plan.
+- [ ] Publish linked draft PRs only after every required repository reaches a publishable state.
+- [ ] Expose partial failure, retry, supersession, and rollback explicitly.
+
+M6 contract evidence: version 1 bounds a change set to 2–16 distinct repositories, with one repository-scoped objective and acceptance-criteria set per participant. Dependencies use the shared deterministic DAG implementation, reject duplicate/missing/self/cyclic edges, and require exactly one typed compatibility contract for each direct dependency. Compatibility contracts classify API, schema, artifact, runtime, or documentation expectations and carry explicit verification criteria. Dependency-first layers preserve declared repository order. Readiness then verifies enabled enrollment and requires every participating repository pair—not only directly connected dependencies—to mutually allow coordination through `multiRepo.coordinateWith`. Violations remain typed evidence. Even a fully allowed plan explicitly grants no job, workspace, model-call, branch, publication, rollout, or merge authority; durable per-repository lineage is the next boundary.
 
 ### M7 — Organization-scale operations — `PLANNED`
 

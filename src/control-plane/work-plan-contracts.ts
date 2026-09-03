@@ -1,4 +1,12 @@
 import * as v from 'valibot';
+import {
+	dependencyEdgesAreUnique,
+	dependencyGraphExcludesSelfEdges,
+	dependencyGraphIsAcyclic,
+	dependencyLayersForNodes,
+	dependencyNodeIdsAreUnique,
+	dependencyTargetsExist,
+} from './dependency-graph.ts';
 
 export const WorkPlanTaskIdSchema = v.pipe(
 	v.string(),
@@ -61,63 +69,6 @@ interface DependencyPlanShape {
 	tasks: Array<{ id: string; dependsOn: string[] }>;
 }
 
-function taskIdsAreUnique(plan: DependencyPlanShape): boolean {
-	const ids = plan.tasks.map(({ id }) => id);
-	return new Set(ids).size === ids.length;
-}
-
-function dependenciesAreUnique(plan: DependencyPlanShape): boolean {
-	return plan.tasks.every(({ dependsOn }) => new Set(dependsOn).size === dependsOn.length);
-}
-
-function dependenciesExist(plan: DependencyPlanShape): boolean {
-	const ids = new Set(plan.tasks.map(({ id }) => id));
-	return plan.tasks.every(({ dependsOn }) => dependsOn.every((dependency) => ids.has(dependency)));
-}
-
-function excludesSelfDependencies(plan: DependencyPlanShape): boolean {
-	return plan.tasks.every(({ id, dependsOn }) => !dependsOn.includes(id));
-}
-
-function isAcyclic(plan: DependencyPlanShape): boolean {
-	const dependencies = new Map(plan.tasks.map(({ id, dependsOn }) => [id, dependsOn]));
-	const visiting = new Set<string>();
-	const visited = new Set<string>();
-
-	function visit(id: string): boolean {
-		if (visited.has(id)) return true;
-		if (visiting.has(id)) return false;
-		visiting.add(id);
-		for (const dependency of dependencies.get(id) ?? []) {
-			if (!visit(dependency)) return false;
-		}
-		visiting.delete(id);
-		visited.add(id);
-		return true;
-	}
-
-	return plan.tasks.every(({ id }) => visit(id));
-}
-
-function dependencyLayerIds(plan: DependencyPlanShape): string[][] {
-	const remaining = new Map(plan.tasks.map(({ id, dependsOn }) => [id, new Set(dependsOn)]));
-	const layers: string[][] = [];
-
-	while (remaining.size > 0) {
-		const ready = plan.tasks
-			.map(({ id }) => id)
-			.filter((id) => remaining.has(id) && remaining.get(id)?.size === 0);
-		if (ready.length === 0) return [];
-		layers.push(ready);
-		for (const id of ready) remaining.delete(id);
-		for (const dependencies of remaining.values()) {
-			for (const id of ready) dependencies.delete(id);
-		}
-	}
-
-	return layers;
-}
-
 export type FileOwnershipScope = v.InferOutput<typeof FileOwnershipScopeSchema>;
 
 export function fileScopesOverlap(left: FileOwnershipScope, right: FileOwnershipScope): boolean {
@@ -161,20 +112,20 @@ function unorderedTaskScopesAreDisjoint(plan: ScopedDependencyPlanShape): boolea
 
 export const MultiWorkerPlanV1Schema = v.pipe(
 	MultiWorkerPlanV1ObjectSchema,
-	v.check((plan) => taskIdsAreUnique(plan), 'Work-plan task IDs must be unique'),
-	v.check((plan) => dependenciesAreUnique(plan), 'A task cannot repeat a dependency'),
-	v.check((plan) => dependenciesExist(plan), 'Every dependency must reference a task in the same plan'),
-	v.check((plan) => excludesSelfDependencies(plan), 'A task cannot depend on itself'),
-	v.check((plan) => isAcyclic(plan), 'Work-plan dependencies must form an acyclic graph'),
+	v.check((plan) => dependencyNodeIdsAreUnique(plan.tasks), 'Work-plan task IDs must be unique'),
+	v.check((plan) => dependencyEdgesAreUnique(plan.tasks), 'A task cannot repeat a dependency'),
+	v.check((plan) => dependencyTargetsExist(plan.tasks), 'Every dependency must reference a task in the same plan'),
+	v.check((plan) => dependencyGraphExcludesSelfEdges(plan.tasks), 'A task cannot depend on itself'),
+	v.check((plan) => dependencyGraphIsAcyclic(plan.tasks), 'Work-plan dependencies must form an acyclic graph'),
 );
 
 export const MultiWorkerPlanV2Schema = v.pipe(
 	MultiWorkerPlanV2ObjectSchema,
-	v.check((plan) => taskIdsAreUnique(plan), 'Work-plan task IDs must be unique'),
-	v.check((plan) => dependenciesAreUnique(plan), 'A task cannot repeat a dependency'),
-	v.check((plan) => dependenciesExist(plan), 'Every dependency must reference a task in the same plan'),
-	v.check((plan) => excludesSelfDependencies(plan), 'A task cannot depend on itself'),
-	v.check((plan) => isAcyclic(plan), 'Work-plan dependencies must form an acyclic graph'),
+	v.check((plan) => dependencyNodeIdsAreUnique(plan.tasks), 'Work-plan task IDs must be unique'),
+	v.check((plan) => dependencyEdgesAreUnique(plan.tasks), 'A task cannot repeat a dependency'),
+	v.check((plan) => dependencyTargetsExist(plan.tasks), 'Every dependency must reference a task in the same plan'),
+	v.check((plan) => dependencyGraphExcludesSelfEdges(plan.tasks), 'A task cannot depend on itself'),
+	v.check((plan) => dependencyGraphIsAcyclic(plan.tasks), 'Work-plan dependencies must form an acyclic graph'),
 	v.check((plan) => taskScopesAreMinimal(plan), 'A task cannot contain duplicate or overlapping file scopes'),
 	v.check((plan) => unorderedTaskScopesAreDisjoint(plan), 'Tasks without dependency ordering must have non-overlapping file scopes'),
 );
@@ -190,7 +141,7 @@ export type MultiWorkerPlan = v.InferOutput<typeof MultiWorkerPlanSchema>;
 /** Returns deterministic dependency-readiness layers in declared task order. */
 export function dependencyLayers(input: MultiWorkerPlan): string[][] {
 	const plan = v.parse(MultiWorkerPlanSchema, input);
-	const layers = dependencyLayerIds(plan);
+	const layers = dependencyLayersForNodes(plan.tasks);
 	if (layers.length === 0) throw new Error('Validated work plan has no dependency-ready task');
 	return layers;
 }
@@ -207,7 +158,7 @@ export interface FileScopeReadinessLayer {
  */
 export function fileScopeReadinessLayers(input: MultiWorkerPlanV2): FileScopeReadinessLayer[] {
 	const plan = v.parse(MultiWorkerPlanV2Schema, input);
-	return dependencyLayerIds(plan).map((taskIds) => ({
+	return dependencyLayersForNodes(plan.tasks).map((taskIds) => ({
 		taskIds,
 		scopesDisjoint: true,
 		executionAuthorized: false,
