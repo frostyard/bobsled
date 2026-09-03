@@ -192,6 +192,8 @@ Migration 40 closes the recovery boundary. A retry execution first requires ever
 
 Acceptance target: an authenticated operator can refine one ambiguous request through chat, inspect the evolving structured brief, freeze an immutable intake snapshot, and submit it to independent triage. Repeated or concurrent submissions converge without duplicate model calls or admissions; a finalized conversation cannot alter its snapshot; and no chat action can create a run, workspace, provider claim, branch, or pull request without the existing downstream authorization step.
 
+Migration 41 establishes the durable conversation envelope before adding inference. Each conversation is principal-owned and binds one explicitly selected enrolled repository, a bounded manual or GitHub-issue seed, and a version-1 brief covering objective, context, acceptance criteria, constraints, non-goals, assumptions, and unresolved questions. Turns retain their complete brief revision and digest in strict sequence. Creation and append operations are idempotent; append uses optimistic version checks across processes; repository switching, more than 100 turns, malformed/tampered evidence, cross-principal reads, and post-cancellation edits fail closed. Cancellation is terminal. Every projection explicitly denies model calls, run admission, and GitHub mutation. Flue-based proposal, immutable final snapshots, fresh triage, and UI actions remain separate later boundaries.
+
 ### M8 — Organization-scale operations — `PLANNED`
 
 - Scheduled and webhook-triggered maintenance.
