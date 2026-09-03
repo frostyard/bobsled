@@ -32,7 +32,18 @@ export function ensureIntakeConversationSchema(db:Database.Database):void {
 		);
 		CREATE INDEX IF NOT EXISTS intake_conversation_revisions_conversation_status_idx
 			ON intake_conversation_revisions(conversation_id, status);
+		CREATE TABLE IF NOT EXISTS intake_brief_snapshots (
+			id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL, request_sha256 TEXT NOT NULL, source_version INTEGER NOT NULL,
+			source_turn_count INTEGER NOT NULL, source_turns_sha256 TEXT NOT NULL, source_turns_json TEXT NOT NULL,
+			brief_sha256 TEXT NOT NULL, brief_json TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
+			UNIQUE(owner_id, idempotency_key),
+			FOREIGN KEY(conversation_id) REFERENCES intake_conversations(id)
+		);
+		CREATE INDEX IF NOT EXISTS intake_brief_snapshots_owner_created_idx
+			ON intake_brief_snapshots(owner_id, created_at DESC);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (41, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (42, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (43, datetime('now'));
 	`);
 }

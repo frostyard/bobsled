@@ -31,6 +31,7 @@ import { triageWorkItem } from './control-plane/triage-service.ts';
 import { IntakeConversationConflictError, IntakeConversationForbiddenError, IntakeConversationNotFoundError, IntakeConversationStore } from './control-plane/intake-conversation-store.ts';
 import { IntakeConversationRevisionConflictError, IntakeConversationRevisionForbiddenError, IntakeConversationRevisionNotFoundError, IntakeConversationRevisionStore } from './control-plane/intake-conversation-revision-store.ts';
 import { IntakeConversationRevisionService } from './control-plane/intake-conversation-revision-service.ts';
+import { IntakeBriefSnapshotConflictError, IntakeBriefSnapshotForbiddenError, IntakeBriefSnapshotNotFoundError, IntakeBriefSnapshotStore } from './control-plane/intake-brief-snapshot-store.ts';
 import { controlPlaneHtml } from './control-plane/ui.ts';
 import { projectOperatorBoard } from './control-plane/operator-board-view.ts';
 import { MultiWorkerOperatorStore } from './control-plane/multi-worker-operator-view.ts';
@@ -82,6 +83,7 @@ const oauthStateCookie = '__Host-bobsled-oauth-state';
 const intakeConversations = new IntakeConversationStore();
 const intakeRevisions = new IntakeConversationRevisionStore(undefined, undefined, intakeConversations);
 const intakeRevisionService = new IntakeConversationRevisionService(intakeRevisions);
+const intakeSnapshots = new IntakeBriefSnapshotStore(undefined, undefined, intakeConversations);
 
 app.use('*', async (context, next) => {
 	const publicPath = context.req.path === '/health' ||
@@ -133,9 +135,9 @@ function githubActionError(context: Parameters<Parameters<typeof app.onError>[0]
 
 function intakeConversationError(context: Parameters<Parameters<typeof app.onError>[0]>[1], error: unknown) {
 	const message = error instanceof Error ? error.message : 'Conversational intake failed';
-	if (error instanceof IntakeConversationNotFoundError || error instanceof IntakeConversationRevisionNotFoundError) return context.json({ error: message }, 404);
-	if (error instanceof IntakeConversationForbiddenError || error instanceof IntakeConversationRevisionForbiddenError) return context.json({ error: message }, 403);
-	if (error instanceof IntakeConversationConflictError || error instanceof IntakeConversationRevisionConflictError) return context.json({ error: message }, 409);
+	if (error instanceof IntakeConversationNotFoundError || error instanceof IntakeConversationRevisionNotFoundError || error instanceof IntakeBriefSnapshotNotFoundError) return context.json({ error: message }, 404);
+	if (error instanceof IntakeConversationForbiddenError || error instanceof IntakeConversationRevisionForbiddenError || error instanceof IntakeBriefSnapshotForbiddenError) return context.json({ error: message }, 403);
+	if (error instanceof IntakeConversationConflictError || error instanceof IntakeConversationRevisionConflictError || error instanceof IntakeBriefSnapshotConflictError) return context.json({ error: message }, 409);
 	return context.json({ error: message }, 400);
 }
 
@@ -309,6 +311,19 @@ app.post('/api/intake-conversations/:conversationId/revisions', async (context) 
 app.post('/api/intake-conversations/:conversationId/cancel', async (context) => {
 	try { return context.json(intakeConversations.cancel(context.req.param('conversationId'), await context.req.json(), context.get('principal'))); }
 	catch (error) { return intakeConversationError(context, error); }
+});
+
+app.get('/api/intake-conversations/:conversationId/snapshot', (context) => {
+	try { return context.json(intakeSnapshots.getForConversation(context.req.param('conversationId'), context.get('principal'))); }
+	catch (error) { return intakeConversationError(context, error); }
+});
+
+app.post('/api/intake-conversations/:conversationId/finalize', async (context) => {
+	try {
+		const body=await context.req.json() as {expectedVersion?:unknown;reason?:unknown};
+		const snapshot=intakeSnapshots.finalize({conversationId:context.req.param('conversationId'),expectedVersion:body.expectedVersion,reason:body.reason},context.get('principal'),context.req.header('idempotency-key')??'');
+		return context.json({snapshot,conversation:intakeConversations.get(snapshot.conversationId,context.get('principal'))},201);
+	} catch (error) { return intakeConversationError(context, error); }
 });
 
 app.get('/api/runs', (context) => context.json(jobLedger.list(context.get('principal'))));
