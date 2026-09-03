@@ -31,6 +31,7 @@ import { ensureMultiWorkerBudgetSchema } from './multi-worker-budget-store.ts';
 import { ensurePublicationRebaseSchema } from './publication-rebase-schema.ts';
 import { ensurePublicationRebaseReviewSchema } from './publication-rebase-review-schema.ts';
 import { ensureMultiRepositoryChangeSetSchema } from './multi-repository-change-set-schema.ts';
+import { ensureIntakeConversationSchema } from './intake-conversation-schema.ts';
 import { dataPath } from '../paths.ts';
 
 export interface Principal {
@@ -178,6 +179,7 @@ export class JobLedger {
 		ensurePublicationRebaseSchema(this.#db);
 		ensurePublicationRebaseReviewSchema(this.#db);
 		ensureMultiRepositoryChangeSetSchema(this.#db);
+		ensureIntakeConversationSchema(this.#db);
 	}
 
 	admit(input: unknown, principal: Principal, idempotencyKey: string): RunRecord {
