@@ -57,7 +57,7 @@ A card is `Delivery` when either:
 - its latest review is `approved` and no publication record exists yet; or
 - its publication is `pending`, `running`, `published`, `checks_pending`, or `ready_for_human`.
 
-Depending on the exact phase, the card may offer **Prepare draft PR**, **Publish draft PR**, **Refresh checks**, or **Open draft PR**. `ready_for_human` means Bobsled's required checks passed; Bobsled still cannot merge.
+Depending on the exact phase, the card may offer **Prepare draft PR**, **Publish draft PR**, **Refresh status**, or **Open draft PR**. **Refresh status** first verifies the recorded pull request's immutable number, URL, branch, commit, base, and Bobsled marker, then reconciles its open/closed/merged lifecycle and required checks. `ready_for_human` means Bobsled's required checks passed; Bobsled still cannot merge.
 
 ### Attention
 
@@ -72,6 +72,10 @@ A card is `Attention` when a human decision or recovery path is required. Qualif
 - a linked multi-worker plan whose dependency chain, attempt allowance, provider-call allowance, or wall-clock budget is terminally exhausted.
 
 The card exposes only a valid recovery action. A permanent policy block has **Details** instead of a retry button that would repeat known-futile work.
+
+### History
+
+A publication enters `History` after GitHub reports that its exact recorded pull request was merged or closed without merge. A merged record is terminal and exposes only **Open pull request**. A closed-without-merge record retains **Refresh status**, because GitHub permits reopening; if reopened, its latest check state places it back in `Delivery` or `Attention`.
 
 ## Multi-worker evidence
 

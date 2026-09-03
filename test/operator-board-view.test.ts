@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { JobLedger } from '../src/control-plane/ledger.ts';
 import { projectOperatorBoard, projectRunForBoard } from '../src/control-plane/operator-board-view.ts';
+import type { DraftPublicationRecord } from '../src/control-plane/publication-contracts.ts';
 
 const principal = { id: 'operator:board-test' };
 const workItem = { source: 'manual' as const, key: 'manual:board', title: 'Exercise the board', body: 'Keep operator state obvious.', labels: [] };
@@ -33,6 +34,34 @@ test('human-gated work is attention, while cancelled work moves to history', () 
 		assert.equal(view.cards.find(({ id }) => id === blocked.id)?.lane, 'attention');
 		assert.equal(view.cards.find(({ id }) => id === blocked.id)?.actions[0]?.kind, 'human_override');
 		assert.equal(view.cards.find(({ id }) => id === cancelled.id)?.lane, 'history');
+	} finally { ledger.close(); }
+});
+
+test('externally merged and closed pull requests become terminal history', () => {
+	const ledger = new JobLedger(':memory:', () => new Date('2026-09-03T04:00:00.000Z'));
+	try {
+		const run = ledger.admit({ repositoryId: 'frostyard/clix', workItem }, principal, 'publication-lifecycle');
+		const publication = {
+			id: '11111111-1111-4111-8111-111111111111', ownerId: principal.id, runId: run.id,
+			jobId: run.jobs[0]!.id, attemptId: '22222222-2222-4222-8222-222222222222',
+			reviewId: '33333333-3333-4333-8333-333333333333', repositoryId: 'frostyard/clix',
+			status: 'merged', baseCommit: 'a'.repeat(40), approvedPatchSha256: 'b'.repeat(64),
+			branchName: 'bobsled/lifecycle', title: workItem.title, body: 'Durable draft body',
+			marker: '<!-- bobsled-publication:lifecycle -->', requiredCheckNames: ['verify'],
+			reason: 'Operator authorized draft publication.', attemptCount: 1, commitSha: 'c'.repeat(40),
+			pullNumber: 42, pullUrl: 'https://github.com/frostyard/clix/pull/42', pullState: 'closed',
+			pullDraft: false, pullMergedAt: '2026-09-03T04:05:00.000Z', pullClosedAt: '2026-09-03T04:05:00.000Z',
+			checks: [], createdAt: '2026-09-03T04:01:00.000Z', updatedAt: '2026-09-03T04:05:00.000Z',
+		} satisfies DraftPublicationRecord;
+		const merged = projectRunForBoard(run, publication);
+		assert.equal(merged.lane, 'history');
+		assert.equal(merged.phase, 'merged');
+		assert.deepEqual(merged.actions.map(({ kind }) => kind), ['open_pull_request']);
+
+		const closed = projectRunForBoard(run, { ...publication, status: 'closed', pullMergedAt: undefined });
+		assert.equal(closed.lane, 'history');
+		assert.equal(closed.phase, 'closed without merge');
+		assert.deepEqual(closed.actions.map(({ kind }) => kind), ['refresh_checks', 'open_pull_request']);
 	} finally { ledger.close(); }
 });
 

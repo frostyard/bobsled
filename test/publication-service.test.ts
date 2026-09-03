@@ -78,17 +78,28 @@ test('records a policy-blocked publication without minting GitHub authority', as
 test('publishes only a generated non-force branch and draft PR, then waits for required checks', async () => {
 	const calls: Array<{ path: string; method: string; body?: unknown; capability: string }> = [];
 	const uses: string[] = [];
+	let pullBody = '';
+	let pullBranch = '';
+	let mergedAt: string | null = null;
 	const publications = service({ authority: authority(async (path, init, capability) => {
 		const body = init.body ? JSON.parse(String(init.body)) : undefined;
 		calls.push({ path, method: init.method ?? 'GET', body, capability });
 		if (path.includes('/pulls?')) return Response.json([]);
+		if (path.endsWith('/pulls/42')) return Response.json({
+			number: 42, html_url: 'https://github.com/frostyard/clix/pull/42', body: pullBody,
+			draft: mergedAt === null, state: mergedAt ? 'closed' : 'open', merged_at: mergedAt, closed_at: mergedAt,
+			head: { ref: pullBranch, sha: commitSha }, base: { ref: 'main' },
+		});
 		if (path.endsWith('/git/ref/heads/main')) return Response.json({ object: { sha: baseCommit } });
 		if (path.includes('/git/ref/heads/bobsled%2F')) return new Response(null, { status: 404 });
 		if (path.endsWith('/git/blobs')) return Response.json({ sha: 'c'.repeat(40) });
 		if (path.endsWith('/git/trees')) return Response.json({ sha: 'd'.repeat(40) });
 		if (path.endsWith('/git/commits')) return Response.json({ sha: commitSha });
 		if (path.endsWith('/git/refs')) return Response.json({ object: { sha: commitSha } });
-		if (path.endsWith('/pulls')) return Response.json({ number: 42, html_url: 'https://github.com/frostyard/clix/pull/42', body: body.body, draft: true, head: { ref: body.head, sha: commitSha } });
+		if (path.endsWith('/pulls')) {
+			pullBody = body.body; pullBranch = body.head;
+			return Response.json({ number: 42, html_url: 'https://github.com/frostyard/clix/pull/42', body: pullBody, draft: true, head: { ref: pullBranch, sha: commitSha } });
+		}
 		if (path.includes('/check-runs')) return Response.json({ check_runs: [{ name: 'verify', status: 'completed', conclusion: 'success', details_url: 'https://github.com/check/1' }] });
 		throw new Error(`Unexpected request: ${init.method} ${path}`);
 	}, uses) });
@@ -105,7 +116,12 @@ test('publishes only a generated non-force branch and draft PR, then waits for r
 		assert.equal(calls.some(({ body }) => body && (body as { force?: boolean }).force === true), false);
 		const ready = await publications.refreshChecks(record.id, owner);
 		assert.equal(ready.status, 'ready_for_human');
-		assert.deepEqual(uses, ['draft_pr_publish', 'commit_checks_read']);
+		assert.equal(ready.pullState, 'open');
+		mergedAt = '2026-09-02T04:30:00.000Z';
+		const merged = await publications.refreshChecks(record.id, owner);
+		assert.equal(merged.status, 'merged');
+		assert.equal(merged.pullMergedAt, mergedAt);
+		assert.deepEqual(uses, ['draft_pr_publish', 'pull_request_status_read', 'commit_checks_read', 'pull_request_status_read']);
 	} finally { publications.close(); }
 });
 
@@ -118,6 +134,11 @@ test('reconciles an existing marked draft PR only when its head equals the deter
 		if (path.endsWith('/git/trees')) return Response.json({ sha: 'd'.repeat(40) });
 		if (path.endsWith('/git/commits')) return Response.json({ sha: commitSha });
 		if (path.includes('/pulls?')) return Response.json([{ number: 51, html_url: 'https://github.com/frostyard/clix/pull/51', body: `Recovered\n${marker}`, draft: true, head: { ref: 'bobsled/recovered', sha: commitSha } }]);
+		if (path.endsWith('/pulls/51')) return Response.json({
+			number: 51, html_url: 'https://github.com/frostyard/clix/pull/51', body: `Recovered\n${marker}`,
+			draft: true, state: 'open', merged_at: null, closed_at: null,
+			head: { ref: 'bobsled/recovered', sha: commitSha }, base: { ref: 'main' },
+		});
 		if (path.endsWith('/git/refs') || (path.endsWith('/pulls') && init.method === 'POST')) visibleMutationCalls.push(path);
 		throw new Error(`Unexpected request: ${init.method} ${path}`);
 	}) });
@@ -128,6 +149,8 @@ test('reconciles an existing marked draft PR only when its head equals the deter
 		assert.equal(recovered.pullNumber, 51);
 		assert.equal(recovered.commitSha, commitSha);
 		assert.deepEqual(visibleMutationCalls, []);
+		await assert.rejects(publications.refreshChecks(record.id, owner), PublicationPolicyBlockedError);
+		assert.match(publications.get(record.id, owner).blockedReason ?? '', /immutable evidence/);
 	} finally { publications.close(); }
 });
 
@@ -150,22 +173,38 @@ test('blocks recovery when a marked PR branch drifted from the deterministic app
 });
 
 test('required failed checks remain visible and never create merge authority', async () => {
+	let closedAt: string | null = null;
 	const publications = service({ authority: authority(async (path, init) => {
 		if (path.endsWith('/git/ref/heads/main')) return Response.json({ object: { sha: baseCommit } });
 		if (path.endsWith('/git/blobs')) return Response.json({ sha: 'c'.repeat(40) });
 		if (path.endsWith('/git/trees')) return Response.json({ sha: 'd'.repeat(40) });
 		if (path.endsWith('/git/commits')) return Response.json({ sha: commitSha });
 		if (path.includes('/pulls?')) return Response.json([{ number: 61, html_url: 'https://github.com/frostyard/clix/pull/61', body: currentMarker, draft: true, head: { ref: 'bobsled/checks', sha: commitSha } }]);
+		if (path.endsWith('/pulls/61')) return Response.json({
+			number: 61, html_url: 'https://github.com/frostyard/clix/pull/61', body: currentMarker,
+			draft: closedAt === null, state: closedAt ? 'closed' : 'open', merged_at: null, closed_at: closedAt,
+			head: { ref: currentBranch, sha: commitSha }, base: { ref: 'main' },
+		});
 		if (path.includes('/check-runs')) return Response.json({ check_runs: [{ name: 'verify', status: 'completed', conclusion: 'failure' }] });
 		throw new Error(`Unexpected request: ${init.method} ${path}`);
 	}) });
 	let currentMarker = '';
+	let currentBranch = '';
 	try {
 		const record = await publications.admit({ runId, expectedVersion: 7, reason: 'Operator tracks required checks without merge authority.' }, owner, 'checks-fail');
-		currentMarker = record.marker;
+		currentMarker = record.marker; currentBranch = record.branchName;
 		await publications.execute(record.id, owner);
 		const checked = await publications.refreshChecks(record.id, owner);
 		assert.equal(checked.status, 'checks_failed');
 		assert.equal(checked.checks[0]?.conclusion, 'failure');
+		closedAt = '2026-09-02T04:45:00.000Z';
+		const closed = await publications.refreshChecks(record.id, owner);
+		assert.equal(closed.status, 'closed');
+		assert.equal(closed.pullClosedAt, closedAt);
+		closedAt = null;
+		const reopened = await publications.refreshChecks(record.id, owner);
+		assert.equal(reopened.status, 'checks_failed');
+		assert.equal(reopened.pullState, 'open');
+		assert.equal(reopened.pullClosedAt, undefined);
 	} finally { publications.close(); }
 });

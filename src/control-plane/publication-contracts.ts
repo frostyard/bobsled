@@ -13,7 +13,7 @@ export const PublicationCheckSchema = v.object({
 	detailsUrl: v.optional(v.string()),
 });
 
-export const DraftPublicationRecordSchema = v.object({
+export const DraftPublicationRecordSchema = v.pipe(v.object({
 	id: v.pipe(v.string(), v.uuid()),
 	ownerId: v.pipe(v.string(), v.minLength(1)),
 	runId: v.pipe(v.string(), v.uuid()),
@@ -21,7 +21,7 @@ export const DraftPublicationRecordSchema = v.object({
 	attemptId: v.pipe(v.string(), v.uuid()),
 	reviewId: v.pipe(v.string(), v.uuid()),
 	repositoryId: v.pipe(v.string(), v.minLength(1)),
-	status: v.picklist(['blocked', 'pending', 'running', 'published', 'checks_pending', 'checks_failed', 'ready_for_human', 'failed']),
+	status: v.picklist(['blocked', 'pending', 'running', 'published', 'checks_pending', 'checks_failed', 'ready_for_human', 'merged', 'closed', 'failed']),
 	baseCommit: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/)),
 	approvedPatchSha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)),
 	branchName: v.pipe(v.string(), v.minLength(1), v.maxLength(255)),
@@ -35,11 +35,18 @@ export const DraftPublicationRecordSchema = v.object({
 	commitSha: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/))),
 	pullNumber: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
 	pullUrl: v.optional(v.string()),
+	pullState: v.optional(v.picklist(['open', 'closed'])),
+	pullDraft: v.optional(v.boolean()),
+	pullMergedAt: v.optional(v.string()),
+	pullClosedAt: v.optional(v.string()),
 	checks: v.array(PublicationCheckSchema),
 	error: v.optional(v.string()),
 	createdAt: v.string(),
 	updatedAt: v.string(),
-});
+}),
+	v.check((record) => record.status !== 'merged' || (record.pullState === 'closed' && record.pullMergedAt !== undefined && record.pullDraft === false), 'Merged publication evidence must describe a non-draft closed pull request'),
+	v.check((record) => record.status !== 'closed' || (record.pullState === 'closed' && record.pullMergedAt === undefined && record.pullClosedAt !== undefined), 'Closed publication evidence must describe an unmerged closed pull request'),
+);
 
 export type DraftPublicationRequest = v.InferOutput<typeof DraftPublicationRequestSchema>;
 export type DraftPublicationRecord = v.InferOutput<typeof DraftPublicationRecordSchema>;

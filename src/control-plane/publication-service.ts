@@ -69,6 +69,7 @@ interface PublicationRow {
 	approved_patch_sha256: string; branch_name: string; title: string; body: string; marker: string;
 	required_checks_json: string; reason: string; blocked_reason: string | null; attempt_count: number; lease_expires_at: string | null;
 	commit_sha: string | null; pull_number: number | null; pull_url: string | null;
+	pull_state: 'open' | 'closed' | null; pull_draft: number | null; pull_merged_at: string | null; pull_closed_at: string | null;
 	checks_json: string; error: string | null; created_at: string; updated_at: string;
 }
 
@@ -93,6 +94,13 @@ const PullSchema = v.object({
 	number: v.pipe(v.number(), v.integer(), v.minValue(1)),
 	html_url: v.string(), body: v.nullable(v.string()), draft: v.boolean(),
 	head: v.object({ ref: v.string(), sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/)) }),
+});
+const PullLifecycleSchema = v.object({
+	number: v.pipe(v.number(), v.integer(), v.minValue(1)),
+	html_url: v.string(), body: v.nullable(v.string()), draft: v.boolean(), state: v.picklist(['open', 'closed']),
+	merged_at: v.nullable(v.string()), closed_at: v.nullable(v.string()),
+	head: v.object({ ref: v.string(), sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/)) }),
+	base: v.object({ ref: v.string() }),
 });
 const PullListSchema = v.array(PullSchema);
 const CheckRunsSchema = v.object({
@@ -120,7 +128,10 @@ function rowToRecord(row: PublicationRow): DraftPublicationRecord {
 		requiredCheckNames: JSON.parse(row.required_checks_json),
 		reason: row.reason, blockedReason: row.blocked_reason ?? undefined, attemptCount: row.attempt_count,
 		commitSha: row.commit_sha ?? undefined, pullNumber: row.pull_number ?? undefined,
-		pullUrl: row.pull_url ?? undefined, checks: JSON.parse(row.checks_json),
+		pullUrl: row.pull_url ?? undefined, pullState: row.pull_state ?? undefined,
+		pullDraft: row.pull_draft === null ? undefined : Boolean(row.pull_draft),
+		pullMergedAt: row.pull_merged_at ?? undefined, pullClosedAt: row.pull_closed_at ?? undefined,
+		checks: JSON.parse(row.checks_json),
 		error: row.error ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at,
 	});
 }
@@ -294,6 +305,7 @@ export class DraftPublicationService {
 				required_checks_json TEXT NOT NULL DEFAULT '[]', reason TEXT NOT NULL,
 				blocked_reason TEXT, attempt_count INTEGER NOT NULL DEFAULT 0, lease_expires_at TEXT,
 				commit_sha TEXT, pull_number INTEGER, pull_url TEXT, checks_json TEXT NOT NULL DEFAULT '[]', error TEXT,
+				pull_state TEXT, pull_draft INTEGER, pull_merged_at TEXT, pull_closed_at TEXT,
 				created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(owner_id, idempotency_key), UNIQUE(run_id, review_id)
 			);
 			CREATE INDEX IF NOT EXISTS draft_publications_status_idx ON draft_publications(status, updated_at);
@@ -301,7 +313,12 @@ export class DraftPublicationService {
 		`);
 		const columns = this.#db.pragma('table_info(draft_publications)') as Array<{ name: string }>;
 		if (!columns.some(({ name }) => name === 'required_checks_json')) this.#db.exec("ALTER TABLE draft_publications ADD COLUMN required_checks_json TEXT NOT NULL DEFAULT '[]'");
+		if (!columns.some(({ name }) => name === 'pull_state')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN pull_state TEXT');
+		if (!columns.some(({ name }) => name === 'pull_draft')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN pull_draft INTEGER');
+		if (!columns.some(({ name }) => name === 'pull_merged_at')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN pull_merged_at TEXT');
+		if (!columns.some(({ name }) => name === 'pull_closed_at')) this.#db.exec('ALTER TABLE draft_publications ADD COLUMN pull_closed_at TEXT');
 		this.#db.prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (9, datetime('now'))").run();
+		this.#db.prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (21, datetime('now'))").run();
 	}
 
 	async admit(input: unknown, principal: Principal, idempotencyKey: string): Promise<DraftPublicationRecord> {
@@ -348,7 +365,7 @@ export class DraftPublicationService {
 
 	async execute(id: string, principal: Principal): Promise<DraftPublicationRecord> {
 		const record = this.get(id, principal);
-		if (['published', 'checks_pending', 'checks_failed', 'ready_for_human'].includes(record.status)) return record;
+		if (['published', 'checks_pending', 'checks_failed', 'ready_for_human', 'merged', 'closed'].includes(record.status)) return record;
 		const request = { runId: record.runId, expectedVersion: (this.#db.prepare('SELECT run_version FROM draft_publications WHERE id = ?').get(id) as { run_version: number }).run_version, reason: record.reason };
 		const candidate = this.#resolveCandidate(request, principal);
 		const blockedReason = publicationPolicyBlock(candidate.repository, this.#repository(record.repositoryId));
@@ -380,9 +397,30 @@ export class DraftPublicationService {
 
 	async refreshChecks(id: string, principal: Principal): Promise<DraftPublicationRecord> {
 		const record = this.get(id, principal);
-		if (!record.commitSha || !record.pullNumber || !['published', 'checks_pending', 'checks_failed', 'ready_for_human'].includes(record.status)) throw new PublicationConflictError('Draft pull request has not been published');
+		if (record.status === 'merged') return record;
+		if (!record.commitSha || !record.pullNumber || !['published', 'checks_pending', 'checks_failed', 'ready_for_human', 'closed'].includes(record.status)) throw new PublicationConflictError('Draft pull request has not been published');
 		const current = this.#repository(record.repositoryId);
 		if (!current) throw new PublicationNotFoundError(`Repository is not enrolled: ${record.repositoryId}`);
+		const pull = await this.#authority.withRequest(record.repositoryId, 'pull_request_status_read', async (authority) => {
+			const response = await authority.request(`/repos/${record.repositoryId}/pulls/${record.pullNumber}`, { method: 'GET' });
+			if (!response.ok) throw new PublicationUpstreamError(`GitHub pull-request lookup failed with HTTP ${response.status}`);
+			return v.parse(PullLifecycleSchema, await response.json());
+		});
+		if (pull.number !== record.pullNumber || pull.html_url !== record.pullUrl || pull.head.ref !== record.branchName || pull.head.sha !== record.commitSha || pull.base.ref !== current.defaultBranch || !pull.body?.includes(record.marker)) {
+			const reason = 'Published pull request no longer matches Bobsled immutable evidence';
+			this.#block(id, reason); throw new PublicationPolicyBlockedError(reason);
+		}
+		const lifecycle = [pull.state, pull.draft ? 1 : 0, pull.merged_at, pull.closed_at, pull.html_url] as const;
+		if (pull.merged_at) {
+			this.#db.prepare("UPDATE draft_publications SET status = 'merged', pull_state = ?, pull_draft = ?, pull_merged_at = ?, pull_closed_at = ?, pull_url = ?, updated_at = ? WHERE id = ?")
+				.run(...lifecycle, this.#now().toISOString(), id);
+			return this.get(id, principal);
+		}
+		if (pull.state === 'closed') {
+			this.#db.prepare("UPDATE draft_publications SET status = 'closed', pull_state = ?, pull_draft = ?, pull_merged_at = ?, pull_closed_at = ?, pull_url = ?, updated_at = ? WHERE id = ?")
+				.run(...lifecycle, this.#now().toISOString(), id);
+			return this.get(id, principal);
+		}
 		const checks = await this.#authority.withRequest(record.repositoryId, 'commit_checks_read', async (authority) => {
 			const response = await authority.request(`/repos/${record.repositoryId}/commits/${record.commitSha}/check-runs?per_page=100`, { method: 'GET' });
 			if (!response.ok) throw new PublicationUpstreamError(`GitHub check-run lookup failed with HTTP ${response.status}`);
@@ -394,7 +432,8 @@ export class DraftPublicationService {
 		const missingOrRunning = required.some((name) => !byName.has(name) || byName.get(name)?.status !== 'completed');
 		const failed = required.some((name) => { const conclusion = byName.get(name)?.conclusion; return conclusion !== undefined && conclusion !== null && !['success', 'neutral', 'skipped'].includes(conclusion); });
 		const status: DraftPublicationRecord['status'] = failed ? 'checks_failed' : missingOrRunning ? 'checks_pending' : 'ready_for_human';
-		this.#db.prepare('UPDATE draft_publications SET status = ?, checks_json = ?, updated_at = ? WHERE id = ?').run(status, json(checks), this.#now().toISOString(), id);
+		this.#db.prepare('UPDATE draft_publications SET status = ?, pull_state = ?, pull_draft = ?, pull_merged_at = ?, pull_closed_at = ?, pull_url = ?, checks_json = ?, updated_at = ? WHERE id = ?')
+			.run(status, ...lifecycle, json(checks), this.#now().toISOString(), id);
 		return this.get(id, principal);
 	}
 

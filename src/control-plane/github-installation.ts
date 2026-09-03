@@ -7,6 +7,7 @@ const permissionProfiles = {
 	issue_metadata_write: { issues: 'write' },
 	repository_contents_read: { contents: 'read' },
 	draft_pr_publish: { contents: 'write', pull_requests: 'write' },
+	pull_request_status_read: { pull_requests: 'read' },
 	commit_checks_read: { checks: 'read' },
 } as const;
 

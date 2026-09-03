@@ -108,12 +108,18 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 		lane = 'attention'; phase = 'execution failed'; attention = 'Implementation did not complete successfully.';
 		summary = 'Inspect retained evidence, then start a revised run if appropriate.'; actions = [action('supersede', 'Start revised run', 'primary')];
 	} else if (publication) {
-		if (publication.status === 'ready_for_human') {
+		if (publication.status === 'merged') {
+			lane = 'history'; phase = 'merged'; summary = 'The draft pull request was merged by a human.';
+			actions = publication.pullUrl ? [action('open_pull_request', 'Open pull request', 'secondary', publication.pullUrl)] : [];
+		} else if (publication.status === 'closed') {
+			lane = 'history'; phase = 'closed without merge'; summary = 'The draft pull request was closed without merge.';
+			actions = [action('refresh_checks', 'Refresh status', 'primary'), ...(publication.pullUrl ? [action('open_pull_request', 'Open pull request', 'secondary', publication.pullUrl)] : [])];
+		} else if (publication.status === 'ready_for_human') {
 			lane = 'delivery'; phase = 'ready for human'; summary = 'Draft pull request and required checks are ready for human review.';
-			actions = [action('open_pull_request', 'Open draft PR', 'primary', publication.pullUrl), action('refresh_checks', 'Refresh checks')];
+			actions = [action('open_pull_request', 'Open draft PR', 'primary', publication.pullUrl), action('refresh_checks', 'Refresh status')];
 		} else if (publication.status === 'checks_pending' || publication.status === 'published') {
 			lane = 'delivery'; phase = 'checks pending'; summary = 'Draft pull request exists; required checks are still running.';
-			actions = [action('refresh_checks', 'Refresh checks', 'primary'), ...(publication.pullUrl ? [action('open_pull_request', 'Open draft PR', 'secondary', publication.pullUrl)] : [])];
+			actions = [action('refresh_checks', 'Refresh status', 'primary'), ...(publication.pullUrl ? [action('open_pull_request', 'Open draft PR', 'secondary', publication.pullUrl)] : [])];
 		} else if (publication.status === 'running' || publication.status === 'pending') {
 			lane = 'delivery'; phase = publication.status === 'running' ? 'publishing' : 'ready to publish'; summary = 'The reviewed patch is admitted to the policy-gated draft publication flow.';
 			actions = publication.status === 'pending' ? [action('publish_publication', 'Publish draft PR', 'primary')] : [];
@@ -121,7 +127,7 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 			lane = 'attention'; phase = `publication ${publication.status}`; attention = publication.blockedReason ?? publication.error ?? 'Draft publication requires operator attention.';
 			summary = attention;
 			actions = publication.status === 'checks_failed'
-				? [action('refresh_checks', 'Refresh checks', 'primary'), ...(publication.pullUrl ? [action('open_pull_request', 'Open draft PR', 'secondary', publication.pullUrl)] : [])]
+				? [action('refresh_checks', 'Refresh status', 'primary'), ...(publication.pullUrl ? [action('open_pull_request', 'Open draft PR', 'secondary', publication.pullUrl)] : [])]
 				: publication.status === 'failed' ? [action('publish_publication', 'Retry publication', 'primary')] : [];
 		}
 	} else if (review?.status === 'queued' || review?.status === 'running') {
