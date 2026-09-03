@@ -18,7 +18,7 @@ The systemd unit gives the service a read-only system view and permits writes on
 1. Build and install dependencies inside Linux so native modules match the target architecture.
 2. Keep application releases immutable and versioned; activate them by changing the `/opt/bobsled/current` symlink.
 3. Keep the previous release until the new health check passes so rollback is a symlink change rather than a rebuild.
-4. Set `BOBSLED_DATA_DIR`, `BOBSLED_WORKSPACE_DIR`, and repository source paths to durable locations outside the release.
+4. Set `BOBSLED_DATA_DIR`, `BOBSLED_WORKSPACE_DIR`, and `BOBSLED_REPOSITORY_SOURCE_ROOT` to durable locations outside the release. Each enrolled checkout lives beneath the source root at its `owner/repository` path. `BOBSLED_CLIX_SOURCE_PATH` remains a legacy clix-only override.
 5. Keep OAuth and GitHub App configuration outside the release and readable only by the service account.
 6. Use a temporary data directory during staged verification so importing the application cannot create state beneath the release.
 7. Normalize staged ownership and traversal permissions before activation; source archives can otherwise preserve restrictive developer modes.

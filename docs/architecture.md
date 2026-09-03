@@ -157,7 +157,7 @@ Local private operation keeps the reversible `local_trusted` principal. When `BO
 
 GitHub user and refresh tokens are never retained. A session principal is `github:<numeric-user-id>` so mutable logins do not define ownership. Existing runs created in `local_trusted` mode retain their historical owner and remain recoverable by returning to that reversible mode; Bobsled does not silently transfer ownership on first login.
 
-Installation authority is separate from operator identity. Octokit's App authentication strategy mints a short-lived token narrowed to the enrolled repository's immutable GitHub database ID and one typed capability profile. Callers receive only a bounded authenticated request closure, never the token. The closure pins the GitHub API origin, overwrites any caller-supplied authorization header, and expires when its callback returns. The current profiles are issue metadata read/write and repository contents read. No enrolled repository permits a write profile yet.
+Installation authority is separate from operator identity. Octokit's App authentication strategy mints a short-lived token narrowed to the enrolled repository's immutable GitHub database ID and one typed capability profile. Callers receive only a bounded authenticated request closure, never the token. The closure pins the GitHub API origin, overwrites any caller-supplied authorization header, and expires when its callback returns. Typed profiles cover issue metadata, repository reads, draft publication, and check reads. Only `frostyard/frostyard-org` currently permits the draft-publication profile; Bobsled has no merge profile or merge endpoint.
 
 ## Durable GitHub issue actions
 

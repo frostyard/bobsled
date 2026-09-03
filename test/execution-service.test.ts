@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -152,6 +152,31 @@ test('missing source capability fails before spending a worker call', async () =
 		assert.equal(workerCalled, false);
 		assert.equal(completed.status, 'failed');
 		assert.equal(completed.jobs[0]?.artifacts[0]?.kind, 'execution_error');
+	} finally {
+		value.ledger.close();
+		rmSync(value.root, { recursive: true, force: true });
+	}
+});
+
+test('resolves enrolled repository checkouts beneath the shared source root', async () => {
+	const value = fixture();
+	const sourceRoot = join(value.root, 'sources');
+	const nestedSource = join(sourceRoot, 'frostyard', 'clix');
+	mkdirSync(join(sourceRoot, 'frostyard'), { recursive: true });
+	renameSync(value.source, nestedSource);
+	try {
+		const service = new ExecutionService({
+			ledger: value.ledger,
+			worker: async () => outcome([], 'no_change'),
+			workspaceRoot: value.workspaces,
+			repositorySourceRoot: sourceRoot,
+			executablePath: value.executablePath,
+		});
+		const completed = await service.execute(value.run.id, {
+			expectedVersion: value.run.version,
+			reason: 'Operator authorizes a source-root resolution proof.',
+		}, principal);
+		assert.equal(completed.status, 'succeeded');
 	} finally {
 		value.ledger.close();
 		rmSync(value.root, { recursive: true, force: true });

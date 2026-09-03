@@ -22,6 +22,13 @@ test('clix explicitly permits public dependency resolution', () => {
 	assert.equal(repositories[0]?.executionPolicy.workerNetwork.mode, 'public_dependencies');
 });
 
+test('the public website permits dependency preparation without worker credentials', () => {
+	const website = repositories.find(({ id }) => id === 'frostyard/frostyard-org');
+	assert.equal(website?.executionPolicy.workerNetwork.mode, 'public_dependencies');
+	assert.equal(website?.publicationPolicy.draftPullRequestsOnly, true);
+	assert.equal(website?.capabilities.merge, false);
+});
+
 test('historical snapshots without worker network policy stay readable but cannot become executable', () => {
 	const historical = structuredClone(repositories[0]) as Record<string, unknown>;
 	const executionPolicy = historical.executionPolicy as Record<string, unknown>;

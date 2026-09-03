@@ -39,13 +39,16 @@ test('lists only enrolled repositories and exposes their bounded policies', asyn
 		readOnly: boolean;
 		capabilities: { writeGitHub: boolean };
 	}>;
-	assert.equal(repositories.length, 2);
+	assert.equal(repositories.length, 3);
 	const clix = repositories.find((repository) => repository.id === 'frostyard/clix');
 	const bobsled = repositories.find((repository) => repository.id === 'frostyard/bobsled');
+	const website = repositories.find((repository) => repository.id === 'frostyard/frostyard-org');
 	assert.equal(clix?.readOnly, true);
 	assert.equal(clix?.capabilities.writeGitHub, false);
 	assert.equal(bobsled?.readOnly, false);
 	assert.equal(bobsled?.capabilities.writeGitHub, true);
+	assert.equal(website?.readOnly, false);
+	assert.equal(website?.capabilities.writeGitHub, true);
 });
 
 test('serves clix dry-run fixtures and rejects unenrolled repositories', async () => {

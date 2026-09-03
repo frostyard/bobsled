@@ -48,6 +48,7 @@ export interface ExecutionServiceOptions {
 	worker?: ImplementationWorkerRunner;
 	workspaceRoot?: string;
 	repositorySources?: Readonly<Record<string, string>>;
+	repositorySourceRoot?: string;
 	executablePath?: string;
 }
 
@@ -142,15 +143,19 @@ export class ExecutionService {
 	readonly #worker: ImplementationWorkerRunner;
 	readonly #workspaceRoot: string;
 	readonly #repositorySources: Readonly<Record<string, string>>;
+	readonly #repositorySourceRoot: string;
 	readonly #executablePath: string;
 
 	constructor(options: ExecutionServiceOptions = {}) {
 		this.#ledger = options.ledger ?? jobLedger;
 		this.#worker = options.worker ?? runImplementationWorker;
 		this.#workspaceRoot = resolve(options.workspaceRoot ?? process.env.BOBSLED_WORKSPACE_DIR ?? './data/workspaces');
-		this.#repositorySources = options.repositorySources ?? {
-			'frostyard/clix': resolve(process.env.BOBSLED_CLIX_SOURCE_PATH ?? '.workspaces/clix'),
-		};
+		this.#repositorySources = options.repositorySources ?? (!options.repositorySourceRoot && process.env.BOBSLED_CLIX_SOURCE_PATH
+			? { 'frostyard/clix': resolve(process.env.BOBSLED_CLIX_SOURCE_PATH) }
+			: {});
+		this.#repositorySourceRoot = resolve(
+			options.repositorySourceRoot ?? process.env.BOBSLED_REPOSITORY_SOURCE_ROOT ?? resolve(this.#workspaceRoot, 'sources'),
+		);
 		this.#executablePath = options.executablePath ?? `${resolve(process.cwd(), 'node_modules/.bin')}:${process.env.PATH ?? ''}`;
 	}
 
@@ -205,10 +210,17 @@ export class ExecutionService {
 	}
 
 	async #createWorkspace(execution: AuthorizedExecution): Promise<ExecutionPaths> {
-		const configuredSource = this.#repositorySources[execution.repository.id];
-		if (!configuredSource) throw new Error(`No local source checkout is configured for ${execution.repository.id}`);
+		const explicitSource = this.#repositorySources[execution.repository.id];
+		const configuredSource = explicitSource
+			?? resolve(this.#repositorySourceRoot, ...execution.repository.id.split('/'));
 		const source = await realpath(configuredSource).catch(() => undefined);
 		if (!source) throw new Error(`Configured source checkout is unavailable for ${execution.repository.id}`);
+		if (!explicitSource) {
+			const sourceRoot = await realpath(this.#repositorySourceRoot).catch(() => undefined);
+			if (!sourceRoot || !source.startsWith(`${sourceRoot}/`)) {
+				throw new Error(`Configured source checkout escapes the repository source root for ${execution.repository.id}`);
+			}
+		}
 		const topLevel = await this.#git(source, ['rev-parse', '--show-toplevel']);
 		if (await realpath(topLevel) !== source) throw new Error('Configured repository source must be the Git worktree root');
 		const baseCommit = await this.#git(source, ['rev-parse', '--verify', `${execution.repository.defaultBranch}^{commit}`]);

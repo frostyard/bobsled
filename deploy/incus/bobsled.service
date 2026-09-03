@@ -14,7 +14,7 @@ Environment=PORT=3000
 Environment=BOBSLED_AUTH_FILE=/etc/bobsled/auth.json
 Environment=BOBSLED_DATA_DIR=/var/lib/bobsled/data
 Environment=BOBSLED_WORKSPACE_DIR=/var/lib/bobsled/workspaces
-Environment=BOBSLED_CLIX_SOURCE_PATH=/var/lib/bobsled/workspaces/sources/frostyard/clix
+Environment=BOBSLED_REPOSITORY_SOURCE_ROOT=/var/lib/bobsled/workspaces/sources
 Environment=HOME=/var/lib/bobsled
 ExecStart=/usr/bin/node dist/server.mjs
 Restart=on-failure
