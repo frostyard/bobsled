@@ -57,11 +57,23 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 			FOREIGN KEY(change_set_id) REFERENCES multi_repository_change_sets(id),
 			FOREIGN KEY(run_id) REFERENCES runs(id), FOREIGN KEY(job_id) REFERENCES jobs(id)
 		);
-		CREATE UNIQUE INDEX IF NOT EXISTS one_reserved_multi_repository_member_per_schedule
-			ON multi_repository_member_preparation_leases(schedule_id) WHERE status = 'reserved';
+		CREATE TABLE IF NOT EXISTS multi_repository_member_preparations (
+			lease_id TEXT PRIMARY KEY, result_sha256 TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+			FOREIGN KEY(lease_id) REFERENCES multi_repository_member_preparation_leases(id)
+		);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (26, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (27, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (28, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (29, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (30, datetime('now'));
+	`);
+	const leaseColumns = new Set((db.prepare('PRAGMA table_info(multi_repository_member_preparation_leases)').all() as Array<{ name: string }>).map(({ name }) => name));
+	if (!leaseColumns.has('started_at')) db.exec('ALTER TABLE multi_repository_member_preparation_leases ADD COLUMN started_at TEXT');
+	if (!leaseColumns.has('finished_at')) db.exec('ALTER TABLE multi_repository_member_preparation_leases ADD COLUMN finished_at TEXT');
+	db.exec(`
+		DROP INDEX IF EXISTS one_reserved_multi_repository_member_per_schedule;
+		CREATE UNIQUE INDEX IF NOT EXISTS one_active_multi_repository_member_per_schedule
+			ON multi_repository_member_preparation_leases(schedule_id)
+			WHERE status IN ('reserved', 'preparing', 'prepared');
 	`);
 }

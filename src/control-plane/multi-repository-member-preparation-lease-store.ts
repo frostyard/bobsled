@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import * as v from 'valibot';
 import { dataPath } from '../paths.ts';
 import { RepositoryContractSchema, RepositoryIdSchema, type RepositoryContract } from './contracts.ts';
+import { PreparationResultSchema } from './execution-contracts.ts';
 import type { Principal } from './ledger.ts';
 import { projectMultiRepositoryChangeSetReadiness } from './multi-repository-change-set-contracts.ts';
 import { ensureMultiRepositoryChangeSetSchema } from './multi-repository-change-set-schema.ts';
@@ -14,6 +15,27 @@ import { repositories as enrolledRepositories } from './repositories.ts';
 
 const Sha256Schema = v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/));
 
+export const MultiRepositoryMemberPreparationResultSchema = v.object({
+	leaseId: v.pipe(v.string(), v.uuid()),
+	repositoryId: RepositoryIdSchema,
+	workspacePath: v.pipe(v.string(), v.minLength(1)),
+	evidencePath: v.pipe(v.string(), v.minLength(1)),
+	baseCommit: v.optional(v.pipe(v.string(), v.regex(/^[a-f0-9]{40}$/))),
+	headCommit: v.optional(v.pipe(v.string(), v.regex(/^[a-f0-9]{40}$/))),
+	preparation: v.optional(PreparationResultSchema),
+	changedPaths: v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(500))), v.maxLength(100)),
+	status: v.picklist(['passed', 'blocked']),
+	violations: v.pipe(v.array(v.picklist([
+		'source_unavailable', 'source_not_root', 'workspace_exists', 'workspace_creation_failed',
+		'preparation_failed', 'preparation_ambiguous', 'inspection_failed', 'head_moved', 'preparation_changed_workspace',
+	])), v.maxLength(10)),
+	detail: v.pipe(v.string(), v.maxLength(10_000)),
+	workspaceReady: v.boolean(),
+	modelDispatchAuthorized: v.literal(false),
+	executionAuthorized: v.literal(false),
+	publicationAuthorized: v.literal(false),
+});
+
 export const MultiRepositoryMemberPreparationLeaseSchema = v.object({
 	id: v.pipe(v.string(), v.uuid()),
 	scheduleId: v.pipe(v.string(), v.uuid()),
@@ -22,17 +44,23 @@ export const MultiRepositoryMemberPreparationLeaseSchema = v.object({
 	runId: v.pipe(v.string(), v.uuid()),
 	jobId: v.pipe(v.string(), v.uuid()),
 	ownerId: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
-	status: v.literal('reserved'),
+	status: v.picklist(['reserved', 'preparing', 'prepared', 'blocked', 'expired']),
 	unitSha256: Sha256Schema,
 	policySnapshotSha256: Sha256Schema,
 	policySnapshot: RepositoryContractSchema,
 	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
-	workspacePreparationAuthorized: v.literal(true),
+	workspacePreparationAuthorized: v.boolean(),
 	modelDispatchAuthorized: v.literal(false),
 	executionAuthorized: v.literal(false),
 	publicationAuthorized: v.literal(false),
 	createdAt: v.string(),
+	startedAt: v.optional(v.string()),
+	finishedAt: v.optional(v.string()),
 	expiresAt: v.string(),
+	preparation: v.optional(v.object({
+		result: MultiRepositoryMemberPreparationResultSchema,
+		createdAt: v.string(),
+	})),
 });
 
 const ReserveRequestSchema = v.object({
@@ -42,6 +70,8 @@ const ReserveRequestSchema = v.object({
 });
 
 export type MultiRepositoryMemberPreparationLease = v.InferOutput<typeof MultiRepositoryMemberPreparationLeaseSchema>;
+export type MultiRepositoryMemberPreparationResult = NonNullable<MultiRepositoryMemberPreparationLease['preparation']>['result'];
+export interface MultiRepositoryMemberPreparationClaim { lease: MultiRepositoryMemberPreparationLease; newlyClaimed: boolean }
 export class MultiRepositoryPreparationLeaseConflictError extends Error {}
 export class MultiRepositoryPreparationLeaseForbiddenError extends Error {}
 export class MultiRepositoryPreparationLeaseNotFoundError extends Error {}
@@ -51,8 +81,11 @@ export class MultiRepositoryPreparationLeasePolicyError extends Error {}
 interface LeaseRow {
 	id: string; schedule_id: string; change_set_id: string; repository_id: string; run_id: string; job_id: string;
 	owner_id: string; idempotency_key: string; request_sha256: string; unit_sha256: string;
-	policy_snapshot_sha256: string; policy_snapshot_json: string; reason: string; status: string; created_at: string; expires_at: string;
+	policy_snapshot_sha256: string; policy_snapshot_json: string; reason: string; status: string; created_at: string;
+	started_at: string | null; finished_at: string | null; expires_at: string;
 }
+
+interface PreparationRow { result_sha256: string; result_json: string; created_at: string }
 
 function canonical(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(canonical);
@@ -62,6 +95,12 @@ function canonical(value: unknown): unknown {
 
 function digest(value: unknown): string {
 	return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+}
+
+function isPassingPreparation(result: MultiRepositoryMemberPreparationResult): boolean {
+	return result.status === 'passed' && result.workspaceReady && result.violations.length === 0
+		&& result.preparation?.status === 'passed' && result.baseCommit === result.headCommit
+		&& result.changedPaths.length === 0;
 }
 
 export class MultiRepositoryMemberPreparationLeaseStore {
@@ -169,6 +208,57 @@ export class MultiRepositoryMemberPreparationLeaseStore {
 		return this.#record(row);
 	}
 
+	claimPreparation(id: string, principal: Principal): MultiRepositoryMemberPreparationClaim {
+		return this.#db.transaction(() => {
+			const lease = this.get(id, principal);
+			if (lease.status === 'preparing' || lease.preparation) return { lease, newlyClaimed: false };
+			if (lease.status !== 'reserved') throw new MultiRepositoryPreparationLeaseConflictError('Only a reserved lease can claim workspace preparation');
+			const timestamp = this.#now().toISOString();
+			if (Date.parse(lease.expiresAt) <= this.#now().getTime()) {
+				const changed = this.#db.prepare(`UPDATE multi_repository_member_preparation_leases
+					SET status = 'expired', finished_at = ? WHERE id = ? AND owner_id = ? AND status = 'reserved'`)
+					.run(timestamp, id, principal.id);
+				if (changed.changes !== 1) throw new MultiRepositoryPreparationLeaseConflictError('Preparation lease expiry raced with another claim');
+				return { lease: this.get(id, principal), newlyClaimed: false };
+			}
+			const changed = this.#db.prepare(`UPDATE multi_repository_member_preparation_leases
+				SET status = 'preparing', started_at = ? WHERE id = ? AND owner_id = ? AND status = 'reserved'`)
+				.run(timestamp, id, principal.id);
+			if (changed.changes !== 1) throw new MultiRepositoryPreparationLeaseConflictError('Workspace preparation was claimed concurrently');
+			return { lease: this.get(id, principal), newlyClaimed: true };
+		}).immediate();
+	}
+
+	completePreparation(id: string, principal: Principal, input: MultiRepositoryMemberPreparationResult): MultiRepositoryMemberPreparationLease {
+		const result = v.parse(MultiRepositoryMemberPreparationResultSchema, input);
+		if (result.leaseId !== id) throw new MultiRepositoryPreparationLeaseConflictError('Preparation evidence does not match its lease');
+		return this.#db.transaction(() => {
+			const lease = this.get(id, principal);
+			if (lease.preparation) {
+				if (digest(lease.preparation.result) !== digest(result)) throw new MultiRepositoryPreparationLeaseConflictError('Preparation evidence conflicts with the durable result');
+				return lease;
+			}
+			if (lease.status !== 'preparing' || result.repositoryId !== lease.repositoryId) {
+				throw new MultiRepositoryPreparationLeaseConflictError('Only a claimed matching lease can record preparation evidence');
+			}
+			const passed = isPassingPreparation(result);
+			if (passed !== (result.status === 'passed')
+				|| (result.status === 'blocked' && (result.workspaceReady || result.violations.length === 0))) {
+				throw new MultiRepositoryPreparationLeaseConflictError('Preparation status disagrees with trusted workspace evidence');
+			}
+			const timestamp = this.#now().toISOString();
+			this.#db.prepare(`INSERT INTO multi_repository_member_preparations
+				(lease_id, result_sha256, result_json, created_at) VALUES (?, ?, ?, ?)`)
+				.run(id, digest(result), JSON.stringify(result), timestamp);
+			const status = passed ? 'prepared' : 'blocked';
+			const changed = this.#db.prepare(`UPDATE multi_repository_member_preparation_leases
+				SET status = ?, finished_at = ? WHERE id = ? AND owner_id = ? AND status = 'preparing'`)
+				.run(status, timestamp, id, principal.id);
+			if (changed.changes !== 1) throw new MultiRepositoryPreparationLeaseConflictError('Workspace preparation was settled concurrently');
+			return this.get(id, principal);
+		}).immediate();
+	}
+
 	#assertDependencyComplete(scheduleId: string, repositoryId: string): void {
 		const dependency = this.#db.prepare(`SELECT r.status AS run_status, j.status AS job_status, j.current_attempt,
 			(SELECT COUNT(*) FROM attempts a WHERE a.job_id = j.id AND a.number = j.current_attempt AND a.status = 'succeeded') AS successful_attempts,
@@ -198,10 +288,26 @@ export class MultiRepositoryMemberPreparationLeaseStore {
 		const expectedExpiresAt = new Date(
 			Date.parse(row.created_at) + policySnapshot.workspacePreparation.timeoutMinutes * 60_000,
 		).toISOString();
-		if (row.status !== 'reserved' || row.change_set_id !== schedule.changeSetId || !member
+		const preparationRow = this.#db.prepare('SELECT result_sha256, result_json, created_at FROM multi_repository_member_preparations WHERE lease_id = ?')
+			.get(row.id) as PreparationRow | undefined;
+		const preparationResult = preparationRow
+			? v.parse(MultiRepositoryMemberPreparationResultSchema, JSON.parse(preparationRow.result_json))
+			: undefined;
+		const lifecycleValid = row.status === 'reserved'
+			? !row.started_at && !row.finished_at && !preparationRow
+			: row.status === 'preparing'
+				? Boolean(row.started_at) && !row.finished_at && !preparationRow
+				: row.status === 'expired'
+					? !row.started_at && Boolean(row.finished_at) && !preparationRow
+					: ['prepared', 'blocked'].includes(row.status) && Boolean(row.started_at) && Boolean(row.finished_at) && Boolean(preparationRow);
+		if (!lifecycleValid || row.change_set_id !== schedule.changeSetId || !member
 			|| row.run_id !== member.runId || row.job_id !== member.jobId || row.unit_sha256 !== member.unitSha256
 			|| digest(policySnapshot) !== row.policy_snapshot_sha256
 			|| row.expires_at !== expectedExpiresAt
+			|| (preparationRow && digest(preparationResult) !== preparationRow.result_sha256)
+			|| (preparationResult && (preparationResult.leaseId !== row.id || preparationResult.repositoryId !== row.repository_id
+				|| (row.status === 'prepared') !== isPassingPreparation(preparationResult)
+				|| (preparationResult.status === 'blocked' && (preparationResult.workspaceReady || preparationResult.violations.length === 0))))
 			|| digest({ scheduleId: row.schedule_id, repositoryId: row.repository_id, reason: row.reason }) !== row.request_sha256) {
 			throw new MultiRepositoryPreparationLeaseConflictError('Stored preparation lease failed schedule, member, policy, or request integrity verification');
 		}
@@ -209,8 +315,10 @@ export class MultiRepositoryMemberPreparationLeaseStore {
 			id: row.id, scheduleId: row.schedule_id, changeSetId: row.change_set_id, repositoryId: row.repository_id,
 			runId: row.run_id, jobId: row.job_id, ownerId: row.owner_id, status: row.status,
 			unitSha256: row.unit_sha256, policySnapshotSha256: row.policy_snapshot_sha256, policySnapshot,
-			reason: row.reason, workspacePreparationAuthorized: true, modelDispatchAuthorized: false,
-			executionAuthorized: false, publicationAuthorized: false, createdAt: row.created_at, expiresAt: row.expires_at,
+			reason: row.reason, workspacePreparationAuthorized: row.status === 'reserved' || row.status === 'preparing', modelDispatchAuthorized: false,
+			executionAuthorized: false, publicationAuthorized: false, createdAt: row.created_at,
+			startedAt: row.started_at ?? undefined, finishedAt: row.finished_at ?? undefined, expiresAt: row.expires_at,
+			preparation: preparationRow && preparationResult ? { result: preparationResult, createdAt: preparationRow.created_at } : undefined,
 		});
 	}
 }
