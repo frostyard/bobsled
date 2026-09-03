@@ -1,8 +1,21 @@
+import { createHash } from 'node:crypto';
 import * as v from 'valibot';
+import { IntegrationAssemblyPatchSchema } from './integration-assembly-contracts.ts';
 import { WorkPlanTaskIdSchema } from './work-plan-contracts.ts';
 
 const Sha256Schema = v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/));
 const GitObjectIdSchema = v.pipe(v.string(), v.regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/));
+
+export const IntegrationConflictReplayManifestSchema = v.object({
+	orderedPatches: v.pipe(v.array(IntegrationAssemblyPatchSchema), v.minLength(1), v.maxLength(31)),
+	stackSha256: Sha256Schema,
+});
+
+export type IntegrationConflictReplayManifest = v.InferOutput<typeof IntegrationConflictReplayManifestSchema>;
+
+export function integrationConflictReplayManifestDigest(orderedPatches: readonly v.InferOutput<typeof IntegrationAssemblyPatchSchema>[]): string {
+	return createHash('sha256').update(JSON.stringify(orderedPatches)).digest('hex');
+}
 
 const ResolutionResultEntries = {
 	resolutionId: v.pipe(v.string(), v.uuid()),
@@ -14,6 +27,7 @@ const ResolutionResultEntries = {
 	appliedTaskIds: v.pipe(v.array(WorkPlanTaskIdSchema), v.maxLength(31)),
 	changedPaths: v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(500))), v.maxLength(100)),
 	conflictPaths: v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(500))), v.maxLength(100)),
+	replayManifest: v.optional(IntegrationConflictReplayManifestSchema),
 	modelCalls: v.literal(0),
 	workerAuthorized: v.literal(false),
 };
@@ -40,6 +54,14 @@ export const IntegrationConflictResolutionResultSchema = v.pipe(v.variant('statu
 ), v.check(
 	(result) => result.status !== 'resolved' || result.appliedTaskIds.length > 0,
 	'Resolved conflict evidence must retain its applied patch stack',
+), v.check(
+	(result) => result.replayManifest === undefined
+		|| result.replayManifest.stackSha256 === integrationConflictReplayManifestDigest(result.replayManifest.orderedPatches),
+	'Conflict replay manifest digest must match its ordered patch evidence',
+), v.check(
+	(result) => result.replayManifest === undefined
+		|| result.appliedTaskIds.every((taskId, index) => result.replayManifest?.orderedPatches[index]?.taskId === taskId),
+	'Applied conflict tasks must be a prefix of the replay manifest',
 ));
 
 export type IntegrationConflictResolutionResult = v.InferOutput<typeof IntegrationConflictResolutionResultSchema>;

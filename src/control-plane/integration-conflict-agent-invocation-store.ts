@@ -5,7 +5,14 @@ import Database from 'better-sqlite3';
 import * as v from 'valibot';
 import { dataPath } from '../paths.ts';
 import { RepositoryContractSchema, WorkItemSchema, type RepositoryContract, type WorkItem } from './contracts.ts';
-import { IntegrationConflictResolutionResultSchema } from './integration-conflict-resolution-contracts.ts';
+import {
+	IntegrationConflictResolutionResultSchema,
+	type IntegrationConflictResolutionResult,
+} from './integration-conflict-resolution-contracts.ts';
+import {
+	IntegrationConflictAgentPreflightResultSchema,
+	type IntegrationConflictAgentPreflightResult,
+} from './integration-conflict-agent-preflight-contracts.ts';
 import { ensureMultiWorkerParentSchema } from './multi-worker-parent-store.ts';
 import { MultiWorkerPlanV2Schema, WorkPlanTaskIdSchema, type MultiWorkerPlanV2 } from './work-plan-contracts.ts';
 
@@ -19,13 +26,18 @@ export const IntegrationConflictAgentInvocationSchema = v.pipe(v.object({
 	sourceAssemblyId: v.pipe(v.string(), v.uuid()),
 	ownerId: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
 	taskId: WorkPlanTaskIdSchema,
-	status: v.picklist(['reserved', 'running', 'resolved', 'blocked', 'failed']),
+	status: v.picklist(['reserved', 'preparing', 'running', 'resolved', 'blocked', 'failed']),
 	modelCalls: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(1)),
 	maxModelCalls: v.literal(1),
 	createdAt: v.string(),
 	startedAt: v.optional(v.string()),
 	finishedAt: v.optional(v.string()),
 	detail: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(10_000))),
+	preflight: v.optional(v.object({
+		result: v.optional(IntegrationConflictAgentPreflightResultSchema),
+		claimedAt: v.string(),
+		createdAt: v.optional(v.string()),
+	})),
 }), v.check(
 	(lease) => lease.status === 'running' ? lease.modelCalls === 1 : true,
 	'A running conflict-agent invocation must retain its sole model claim',
@@ -44,6 +56,12 @@ export const IntegrationConflictAgentInvocationSchema = v.pipe(v.object({
 ), v.check(
 	(lease) => ['blocked', 'failed'].includes(lease.status) ? lease.detail !== undefined : true,
 	'A blocked or failed conflict-agent invocation must retain a bounded detail',
+), v.check(
+	(lease) => lease.status !== 'preparing' || (lease.preflight !== undefined && lease.preflight.result === undefined),
+	'A preparing conflict-agent invocation must retain its unsettled preflight claim',
+), v.check(
+	(lease) => lease.modelCalls !== 1 || lease.preflight?.result?.status === 'passed',
+	'A conflict-agent model call requires passing durable preflight evidence',
 ));
 
 export type IntegrationConflictAgentInvocation = v.InferOutput<typeof IntegrationConflictAgentInvocationSchema>;
@@ -51,6 +69,7 @@ export type IntegrationConflictAgentInvocation = v.InferOutput<typeof Integratio
 export interface IntegrationConflictAgentContext {
 	sourceWorkspacePath: string;
 	conflictPaths: string[];
+	sourceResolution: Extract<IntegrationConflictResolutionResult, { status: 'blocked' }>;
 	baseCommit: string;
 	plan: MultiWorkerPlanV2;
 	repository: RepositoryContract;
@@ -89,7 +108,12 @@ export function ensureIntegrationConflictAgentInvocationSchema(db: Database.Data
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS one_model_bearing_conflict_agent_invocation
 			ON integration_conflict_agent_invocations(source_resolution_id) WHERE model_calls = 1;
+		CREATE TABLE IF NOT EXISTS integration_conflict_agent_preflights (
+			invocation_id TEXT PRIMARY KEY, result_json TEXT, claimed_at TEXT NOT NULL, created_at TEXT,
+			FOREIGN KEY(invocation_id) REFERENCES integration_conflict_agent_invocations(id)
+		);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (17, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (18, datetime('now'));
 	`);
 }
 
@@ -150,7 +174,7 @@ export class IntegrationConflictAgentInvocationStore {
 		return this.#db.transaction(() => {
 			const lease = this.get(agentAttemptId, ownerId);
 			if (lease.status === 'running') return { lease, newlyClaimed: false };
-			if (lease.status !== 'reserved' || lease.modelCalls !== 0) {
+			if (lease.status !== 'reserved' || lease.modelCalls !== 0 || lease.preflight?.result?.status !== 'passed') {
 				throw new IntegrationConflictAgentInvocationConflictError('Only a reserved conflict-agent invocation can claim a model call');
 			}
 			if (this.#db.prepare(`SELECT id FROM integration_conflict_agent_invocations
@@ -172,6 +196,65 @@ export class IntegrationConflictAgentInvocationStore {
 		})();
 	}
 
+	claimPreflight(agentAttemptId: string, ownerId: string): { lease: IntegrationConflictAgentInvocation; newlyClaimed: boolean } {
+		return this.#db.transaction(() => {
+			const lease = this.get(agentAttemptId, ownerId);
+			if (lease.preflight) return { lease, newlyClaimed: false };
+			if (lease.status !== 'reserved' || lease.modelCalls !== 0) {
+				throw new IntegrationConflictAgentInvocationConflictError('Only an unprepared conflict-agent reservation can claim preflight');
+			}
+			const timestamp = this.#now().toISOString();
+			this.#db.prepare(`INSERT INTO integration_conflict_agent_preflights
+				(invocation_id, result_json, claimed_at, created_at) VALUES (?, NULL, ?, NULL)`)
+				.run(agentAttemptId, timestamp);
+			const changed = this.#db.prepare(`UPDATE integration_conflict_agent_invocations SET status = 'preparing'
+				WHERE id = ? AND owner_id = ? AND status = 'reserved' AND model_calls = 0`)
+				.run(agentAttemptId, ownerId);
+			if (changed.changes !== 1) throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent preflight was claimed concurrently');
+			return { lease: this.get(agentAttemptId, ownerId), newlyClaimed: true };
+		})();
+	}
+
+	completePreflight(agentAttemptId: string, ownerId: string, inputResult: IntegrationConflictAgentPreflightResult): IntegrationConflictAgentInvocation {
+		const result = v.parse(IntegrationConflictAgentPreflightResultSchema, inputResult);
+		if (result.agentAttemptId !== agentAttemptId) throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent preflight does not match its invocation');
+		return this.#db.transaction(() => {
+			const lease = this.get(agentAttemptId, ownerId);
+			if (lease.preflight?.result) {
+				if (JSON.stringify(canonical(lease.preflight.result)) !== JSON.stringify(canonical(result))) {
+					throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent preflight conflicts with existing evidence');
+				}
+				return lease;
+			}
+			if (lease.status !== 'preparing' || lease.modelCalls !== 0 || !lease.preflight) {
+				throw new IntegrationConflictAgentInvocationConflictError('Only a claimed conflict-agent preflight can record evidence');
+			}
+			const context = this.getContext(agentAttemptId, ownerId);
+			if (result.sourceResolutionId !== lease.sourceResolutionId || result.baseCommit !== context.baseCommit) {
+				throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent preflight does not match its durable parent');
+			}
+			if (result.status === 'passed' && (
+				context.sourceResolution.replayManifest === undefined
+				|| result.workspacePath === context.sourceWorkspacePath
+				|| result.headCommit !== context.baseCommit
+				|| result.failedTaskId !== context.sourceResolution.failedTaskId
+				|| result.appliedTaskIds.join('\0') !== context.sourceResolution.appliedTaskIds.join('\0')
+				|| [...result.conflictPaths].sort().join('\0') !== [...context.conflictPaths].sort().join('\0')
+			)) throw new IntegrationConflictAgentInvocationConflictError('Passing conflict-agent preflight does not reproduce its trusted source evidence');
+			const timestamp = this.#now().toISOString();
+			this.#db.prepare(`UPDATE integration_conflict_agent_preflights SET result_json = ?, created_at = ?
+				WHERE invocation_id = ? AND result_json IS NULL`).run(JSON.stringify(result), timestamp, agentAttemptId);
+			const status = result.status === 'passed' ? 'reserved' : 'blocked';
+			const changed = this.#db.prepare(`UPDATE integration_conflict_agent_invocations
+				SET status = ?, detail = ?, finished_at = ?
+				WHERE id = ? AND owner_id = ? AND status = 'preparing' AND model_calls = 0`)
+				.run(status, result.status === 'blocked' ? result.detail : null,
+					result.status === 'blocked' ? timestamp : null, agentAttemptId, ownerId);
+			if (changed.changes !== 1) throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent preflight was settled concurrently');
+			return this.get(agentAttemptId, ownerId);
+		})();
+	}
+
 	blockBeforeDispatch(agentAttemptId: string, ownerId: string, detail: string): IntegrationConflictAgentInvocation {
 		return this.#settle(agentAttemptId, ownerId, 'blocked', 0, detail);
 	}
@@ -185,12 +268,20 @@ export class IntegrationConflictAgentInvocationStore {
 			.get(agentAttemptId) as Record<string, unknown> | undefined;
 		if (!row) throw new IntegrationConflictAgentInvocationNotFoundError('Conflict-agent invocation does not exist');
 		if (row.owner_id !== ownerId) throw new IntegrationConflictAgentInvocationForbiddenError('Conflict-agent invocation belongs to another principal');
+		const preflightRow = this.#db.prepare(`SELECT result_json, claimed_at, created_at
+			FROM integration_conflict_agent_preflights WHERE invocation_id = ?`).get(agentAttemptId) as {
+				result_json: string | null; claimed_at: string; created_at: string | null;
+			} | undefined;
 		return v.parse(IntegrationConflictAgentInvocationSchema, {
 			agentAttemptId: row.id, sourceResolutionId: row.source_resolution_id,
 			sourceAssemblyId: row.source_assembly_id, ownerId: row.owner_id, taskId: row.task_id,
 			status: row.status, modelCalls: row.model_calls, maxModelCalls: row.max_model_calls,
 			createdAt: row.created_at, startedAt: row.started_at ?? undefined,
 			finishedAt: row.finished_at ?? undefined, detail: row.detail ?? undefined,
+			preflight: preflightRow ? {
+				result: preflightRow.result_json ? JSON.parse(preflightRow.result_json) : undefined,
+				claimedAt: preflightRow.claimed_at, createdAt: preflightRow.created_at ?? undefined,
+			} : undefined,
 		});
 	}
 
@@ -216,6 +307,7 @@ export class IntegrationConflictAgentInvocationStore {
 		return {
 			sourceWorkspacePath: resolution.workspacePath,
 			conflictPaths: resolution.conflictPaths,
+			sourceResolution: resolution,
 			baseCommit: row.base_commit,
 			plan: v.parse(MultiWorkerPlanV2Schema, JSON.parse(row.plan_json)),
 			repository: v.parse(RepositoryContractSchema, JSON.parse(row.policy_snapshot_json)),

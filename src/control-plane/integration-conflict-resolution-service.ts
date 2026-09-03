@@ -13,6 +13,7 @@ import {
 } from './integration-workspace-service.ts';
 import {
 	IntegrationConflictResolutionResultSchema,
+	integrationConflictReplayManifestDigest,
 	type IntegrationConflictResolutionResult,
 } from './integration-conflict-resolution-contracts.ts';
 
@@ -86,6 +87,8 @@ export class IntegrationConflictResolutionService {
 			}
 		}
 		if (stackBytes > MAX_STACK_BYTES) throw new IntegrationConflictResolutionError('Patch stack exceeds the 2 MiB resolution limit');
+		const orderedPatches = plan.orderedPatches.map((patch) => ({ ...patch }));
+		const replayManifest = { orderedPatches, stackSha256: integrationConflictReplayManifestDigest(orderedPatches) };
 
 		const source = await realpath(this.#repositorySource).catch(() => undefined);
 		if (!source) throw new IntegrationConflictResolutionError('Configured integration source is unavailable');
@@ -122,7 +125,7 @@ export class IntegrationConflictResolutionService {
 				return this.#record(evidencePath, {
 					resolutionId, sourceAssemblyId: sourceAssembly.assemblyId, taskId: plan.taskId,
 					baseCommit: plan.baseCommit, workspacePath, strategy: 'git_three_way', appliedTaskIds,
-					changedPaths: await this.#changedPaths(workspacePath), conflictPaths, modelCalls: 0,
+					changedPaths: await this.#changedPaths(workspacePath), conflictPaths, replayManifest, modelCalls: 0,
 					workerAuthorized: false, status: 'blocked',
 					reason: conflictPaths.length > 0 ? 'unresolved_conflict' : 'patch_rejected',
 					failedTaskId: payload.taskId,
@@ -137,21 +140,21 @@ export class IntegrationConflictResolutionService {
 		if (!samePaths(changedPaths, expectedPaths)) return this.#record(evidencePath, {
 			resolutionId, sourceAssemblyId: sourceAssembly.assemblyId, taskId: plan.taskId,
 			baseCommit: plan.baseCommit, workspacePath, strategy: 'git_three_way', appliedTaskIds,
-			changedPaths, conflictPaths: [], modelCalls: 0, workerAuthorized: false, status: 'blocked',
+			changedPaths, conflictPaths: [], replayManifest, modelCalls: 0, workerAuthorized: false, status: 'blocked',
 			reason: 'changed_path_mismatch', detail: 'Resolved patch paths do not match the trusted assembly plan',
 		});
 		const head = await this.#git(workspacePath, ['rev-parse', 'HEAD']);
 		if (head !== plan.baseCommit) return this.#record(evidencePath, {
 			resolutionId, sourceAssemblyId: sourceAssembly.assemblyId, taskId: plan.taskId,
 			baseCommit: plan.baseCommit, workspacePath, strategy: 'git_three_way', appliedTaskIds,
-			changedPaths, conflictPaths: [], modelCalls: 0, workerAuthorized: false, status: 'blocked',
+			changedPaths, conflictPaths: [], replayManifest, modelCalls: 0, workerAuthorized: false, status: 'blocked',
 			reason: 'head_moved', detail: 'Three-way resolution moved the workspace HEAD',
 		});
 		const combinedPatch = await this.#git(workspacePath, ['diff', '--binary', '--no-ext-diff', '--no-renames', 'HEAD', '--'], false);
 		return this.#record(evidencePath, {
 			resolutionId, sourceAssemblyId: sourceAssembly.assemblyId, taskId: plan.taskId,
 			baseCommit: plan.baseCommit, workspacePath, strategy: 'git_three_way', appliedTaskIds,
-			changedPaths, conflictPaths: [], modelCalls: 0, workerAuthorized: false,
+			changedPaths, conflictPaths: [], replayManifest, modelCalls: 0, workerAuthorized: false,
 			status: 'resolved', patchSha256: digest(combinedPatch),
 		});
 	}
