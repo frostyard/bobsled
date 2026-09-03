@@ -25,6 +25,12 @@ import {
 	MultiRepositoryPublicationAuthorizationPolicyError,
 	MultiRepositoryPublicationAuthorizationStore,
 } from '../src/control-plane/multi-repository-publication-authorization-store.ts';
+import { MultiRepositoryPublicationExecutionService } from '../src/control-plane/multi-repository-publication-execution-service.ts';
+import {
+	MultiRepositoryPublicationExecutionForbiddenError,
+	MultiRepositoryPublicationExecutionStore,
+} from '../src/control-plane/multi-repository-publication-execution-store.ts';
+import type { DraftPublicationRecord } from '../src/control-plane/publication-contracts.ts';
 import { repositories } from '../src/control-plane/repositories.ts';
 
 const principal = { id: 'operator:compatibility-execution-test' };
@@ -107,6 +113,56 @@ function prepare(value: ReturnType<typeof fixture>) {
 	const executions = new MultiRepositoryCompatibilityExecutionStore(value.path, now, policy);
 	const execution = executions.reserve({ authorizationId: authorization.id, reason: 'Run the exact compatibility gate once.' }, principal, 'execution'); executions.close();
 	return { policy, execution, workspaces };
+}
+
+async function preparePublicationBarrier(value: ReturnType<typeof fixture>) {
+	const prepared = prepare(value);
+	const executionStore = new MultiRepositoryCompatibilityExecutionStore(value.path, now, prepared.policy);
+	const executionService = new MultiRepositoryCompatibilityExecutionService({
+		path: value.path, store: executionStore, workspaceRoot: value.workspaceRoot,
+		runner: async () => ({ status: 'passed', exitCode: 0, durationMs: 1, stdout: '', stderr: '', truncated: false }),
+	});
+	try {
+		const execution = await executionService.run(prepared.execution.id, principal.id);
+		const publications = new MultiRepositoryPublicationAuthorizationStore(value.path, now, prepared.policy);
+		try {
+			const authorization = publications.authorize({ compatibilityExecutionId: execution.id, reason: 'Bind every approved patch before linked draft publication.' }, principal, 'publication-barrier');
+			return { ...prepared, authorization };
+		} finally { publications.close(); }
+	} finally { executionService.close(); }
+}
+
+function publicationAdapter(authorization: ReturnType<MultiRepositoryPublicationAuthorizationStore['get']>, failRepositoryId?: string, blockedRepositoryId?: string) {
+	const records = new Map<string, DraftPublicationRecord>(); const admitted: string[] = []; const executed: string[] = [];
+	const byRepository = new Map(authorization.members.map((member) => [member.repositoryId, member]));
+	return {
+		admitted, executed,
+		async admit(input: unknown, owner: { id: string }, key: string) {
+			const request = input as { runId: string; reason: string };
+			const repositoryId = key.split(':').at(-1)!;
+			const member = byRepository.get(repositoryId)!;
+			admitted.push(repositoryId);
+			const existing = [...records.values()].find((record) => record.runId === request.runId);
+			if (existing) return existing;
+			const index = records.size;
+			const record = {
+				id: `30000000-0000-4000-8000-0000000000${index + 61}`, ownerId: owner.id, runId: request.runId,
+				jobId: member.jobId, attemptId: member.attemptId, reviewId: member.reviewId, repositoryId,
+				status: repositoryId === blockedRepositoryId ? 'blocked' as const : 'pending' as const,
+				baseCommit: member.baseCommit, approvedPatchSha256: member.patchSha256, branchName: `bobsled/member-${index}`, title: 'Linked change',
+				body: 'Linked draft publication', marker: `<!-- linked-${index} -->`, requiredCheckNames: ['ci'],
+				reason: request.reason, attemptCount: 0, checks: [], createdAt: now().toISOString(), updatedAt: now().toISOString(),
+			};
+			records.set(record.id, record as DraftPublicationRecord); return record as DraftPublicationRecord;
+		},
+		async execute(id: string) {
+			const record = records.get(id)!; executed.push(record.repositoryId);
+			if (record.repositoryId === failRepositoryId) { records.set(id, { ...record, status: 'failed', error: 'simulated upstream failure' }); throw new Error('simulated upstream failure'); }
+			const published = { ...record, status: 'published' as const, commitSha: 'a'.repeat(40), pullNumber: executed.length, pullUrl: `https://example.invalid/${executed.length}` };
+			records.set(id, published); return published;
+		},
+		get(id: string) { return records.get(id)!; },
+	};
 }
 
 test('runs the authorized compatibility gate once and preserves all member workspaces', async () => {
@@ -236,6 +292,63 @@ test('blocks linked publication before side effects when compatibility or curren
 			finally { db.close(); }
 		} finally { publications.close(); }
 	} finally { executionService.close(); rmSync(value.root, { recursive: true, force: true }); }
+});
+
+test('creates every linked draft once in dependency-first order and retains terminal evidence', async () => {
+	const value = fixture();
+	try {
+		const prepared = await preparePublicationBarrier(value);
+		const store = new MultiRepositoryPublicationExecutionStore(value.path, now, prepared.policy);
+		const adapter = publicationAdapter(prepared.authorization);
+		const service = new MultiRepositoryPublicationExecutionService({ path: value.path, store, publications: adapter });
+		try {
+			const execution = store.reserve({ authorizationId: prepared.authorization.id, reason: 'Create each linked draft in dependency-first order.' }, principal, 'linked-execution');
+			const result = await service.run(execution.id, principal.id);
+			assert.equal(result.status, 'succeeded'); assert.equal(result.publicationsStarted, 2);
+			assert.deepEqual(adapter.admitted, ['frostyard/clix', 'frostyard/frostyard-org']);
+			assert.deepEqual(adapter.executed, ['frostyard/clix', 'frostyard/frostyard-org']);
+			assert.equal(result.result?.members.every(({ status }) => status === 'published'), true);
+			assert.equal(result.rolloutAuthorized, false); assert.equal(result.mergeAuthorized, false);
+			assert.equal((await service.run(execution.id, principal.id)).status, 'succeeded');
+			assert.equal(adapter.executed.length, 2);
+			assert.throws(() => store.get(execution.id, { id: 'operator:other' }), MultiRepositoryPublicationExecutionForbiddenError);
+			const db = new Database(value.path, { readonly: true });
+			try { assert.equal((db.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version=38').get() as { count: number }).count, 1); }
+			finally { db.close(); }
+		} finally { service.close(); store.close(); }
+	} finally { rmSync(value.root, { recursive: true, force: true }); }
+});
+
+test('preflights all members before mutation and stops dependency rollout on partial failure', async () => {
+	const blockedValue = fixture();
+	try {
+		const prepared = await preparePublicationBarrier(blockedValue);
+		const store = new MultiRepositoryPublicationExecutionStore(blockedValue.path, now, prepared.policy);
+		const adapter = publicationAdapter(prepared.authorization, undefined, 'frostyard/frostyard-org');
+		const service = new MultiRepositoryPublicationExecutionService({ path: blockedValue.path, store, publications: adapter });
+		try {
+			const execution = store.reserve({ authorizationId: prepared.authorization.id, reason: 'Require all draft intents before mutation.' }, principal, 'blocked-execution');
+			const result = await service.run(execution.id, principal.id);
+			assert.equal(result.status, 'blocked'); assert.equal(result.publicationsStarted, 0); assert.equal(adapter.executed.length, 0);
+			assert.equal(result.result?.failedRepositoryId, 'frostyard/frostyard-org');
+		} finally { service.close(); store.close(); }
+	} finally { rmSync(blockedValue.root, { recursive: true, force: true }); }
+
+	const partialValue = fixture();
+	try {
+		const prepared = await preparePublicationBarrier(partialValue);
+		const store = new MultiRepositoryPublicationExecutionStore(partialValue.path, now, prepared.policy);
+		const adapter = publicationAdapter(prepared.authorization, 'frostyard/frostyard-org');
+		const service = new MultiRepositoryPublicationExecutionService({ path: partialValue.path, store, publications: adapter });
+		try {
+			const execution = store.reserve({ authorizationId: prepared.authorization.id, reason: 'Stop linked rollout at the first failed repository.' }, principal, 'partial-execution');
+			const result = await service.run(execution.id, principal.id);
+			assert.equal(result.status, 'partial'); assert.equal(result.publicationsStarted, 2);
+			assert.deepEqual(adapter.executed, ['frostyard/clix', 'frostyard/frostyard-org']);
+			assert.equal(result.result?.members[0]?.status, 'published'); assert.equal(result.result?.members[1]?.status, 'failed');
+			assert.equal((await service.run(execution.id, principal.id)).status, 'partial'); assert.equal(adapter.executed.length, 2);
+		} finally { service.close(); store.close(); }
+	} finally { rmSync(partialValue.root, { recursive: true, force: true }); }
 });
 
 test('Linux runner removes networking and bind-mounts every peer workspace read-only', {
