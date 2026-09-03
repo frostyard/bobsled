@@ -65,6 +65,11 @@ import {
 	PublicationRebaseReviewForbiddenError,
 	PublicationRebaseReviewNotFoundError,
 } from './control-plane/publication-rebase-review-service.ts';
+import {
+	publicationRecoveryResolutions,
+	PublicationRecoveryResolutionConflictError,
+	PublicationRecoveryResolutionForbiddenError,
+} from './control-plane/publication-recovery-resolution-service.ts';
 import './providers.ts';
 
 const app = new Hono<{ Variables: { principal: OperatorPrincipal | typeof localPrincipal } }>();
@@ -133,8 +138,8 @@ function publicationError(context: Parameters<Parameters<typeof app.onError>[0]>
 function publicationRecoveryError(context: Parameters<Parameters<typeof app.onError>[0]>[1], error: unknown) {
 	const message = error instanceof Error ? error.message : 'Publication recovery failed';
 	if (error instanceof PublicationRebaseNotFoundError || error instanceof PublicationRebaseReviewNotFoundError || error instanceof PublicationNotFoundError) return context.json({ error: message }, 404);
-	if (error instanceof PublicationRebaseForbiddenError || error instanceof PublicationRebaseReviewForbiddenError || error instanceof PublicationForbiddenError) return context.json({ error: message }, 403);
-	if (error instanceof PublicationRebaseConflictError || error instanceof PublicationRebaseReviewConflictError || error instanceof PublicationConflictError || error instanceof PublicationPolicyBlockedError) return context.json({ error: message }, 409);
+	if (error instanceof PublicationRebaseForbiddenError || error instanceof PublicationRebaseReviewForbiddenError || error instanceof PublicationRecoveryResolutionForbiddenError || error instanceof PublicationForbiddenError) return context.json({ error: message }, 403);
+	if (error instanceof PublicationRebaseConflictError || error instanceof PublicationRebaseReviewConflictError || error instanceof PublicationRecoveryResolutionConflictError || error instanceof PublicationConflictError || error instanceof PublicationPolicyBlockedError) return context.json({ error: message }, 409);
 	if (error instanceof GitHubInstallationConfigurationError) return context.json({ error: message }, 503);
 	if (error instanceof PublicationUpstreamError) return context.json({ error: message }, 502);
 	return context.json({ error: message }, 400);
@@ -268,7 +273,7 @@ app.get('/api/operator-board', (context) => {
 	try {
 		return context.json(projectOperatorBoard(
 			jobLedger.list(principal), draftPublications.list(principal), new Date(), multiWorker.list(principal.id),
-			publicationRebases.list(principal), publicationRebaseReviews.list(principal),
+			publicationRebases.list(principal), publicationRebaseReviews.list(principal), publicationRecoveryResolutions.list(principal),
 		));
 	} finally {
 		multiWorker.close();
@@ -388,6 +393,14 @@ app.post('/api/publication-recoveries/reviews/:reviewId/promote', async (context
 		const input = await context.req.json() as { reason?: unknown };
 		return context.json(await draftPublications.admitRecovered(
 			{ rebaseReviewId: context.req.param('reviewId'), reason: input.reason }, context.get('principal'), context.req.header('idempotency-key') ?? '',
+		), 201);
+	} catch (error) { return publicationRecoveryError(context, error); }
+});
+
+app.post('/api/publication-recoveries/resolutions', async (context) => {
+	try {
+		return context.json(publicationRecoveryResolutions.admit(
+			await context.req.json(), context.get('principal'), context.req.header('idempotency-key') ?? '',
 		), 201);
 	} catch (error) { return publicationRecoveryError(context, error); }
 });

@@ -4,6 +4,7 @@ import { DraftPublicationRecordSchema, type DraftPublicationRecord } from './pub
 import { MultiWorkerOperatorEvidenceSchema, type MultiWorkerOperatorEvidence } from './multi-worker-operator-view.ts';
 import { PublicationRebaseRecordSchema, type PublicationRebaseRecord } from './publication-rebase-contracts.ts';
 import { PublicationRebaseReviewRecordSchema, type PublicationRebaseReviewRecord } from './publication-rebase-review-contracts.ts';
+import { PublicationRecoveryResolutionRecordSchema, type PublicationRecoveryResolutionRecord } from './publication-recovery-resolution-contracts.ts';
 import { getRepository } from './repositories.ts';
 
 export const OperatorBoardLaneSchema = v.picklist(['ready', 'working', 'review', 'delivery', 'attention', 'history']);
@@ -11,6 +12,7 @@ export const OperatorBoardActionKindSchema = v.picklist([
 	'go_fix', 'human_override', 'cancel', 'supersede', 'manual_review', 'revise_task',
 	'prepare_publication', 'publish_publication', 'refresh_checks', 'open_pull_request',
 	'replay_publication', 'review_publication_replay', 'promote_publication_replay',
+	'resolve_publication_supersession',
 ]);
 
 export const PublicationRecoveryOperatorEvidenceSchema = v.object({
@@ -18,6 +20,10 @@ export const PublicationRecoveryOperatorEvidenceSchema = v.object({
 	rebase: v.optional(PublicationRebaseRecordSchema),
 	review: v.optional(PublicationRebaseReviewRecordSchema),
 	promotedPublicationId: v.optional(v.pipe(v.string(), v.uuid())),
+	resolution: v.optional(PublicationRecoveryResolutionRecordSchema),
+	supersedingCandidate: v.optional(v.object({
+		publicationId: v.pipe(v.string(), v.uuid()), pullNumber: v.pipe(v.number(), v.integer(), v.minValue(1)), pullUrl: v.string(),
+	})),
 });
 
 export type PublicationRecoveryOperatorEvidence = v.InferOutput<typeof PublicationRecoveryOperatorEvidenceSchema>;
@@ -89,10 +95,11 @@ function action(kind: OperatorBoardAction['kind'], label: string, emphasis: Oper
 	return { kind, label, emphasis, ...(url ? { url } : {}) };
 }
 
-function staleBaseBlocked(publication: DraftPublicationRecord): boolean {
+function staleBaseBlocked(publication: DraftPublicationRecord, requireRecoveryPolicy = true): boolean {
 	const repository = getRepository(publication.repositoryId);
-	if (!repository || repository.readOnly || !repository.executionPolicy.enabled || !repository.reviewPolicy.enabled
-		|| !repository.publicationPolicy.enabled || !repository.capabilities.writeCode || !repository.capabilities.writeGitHub) return false;
+	if (!repository) return false;
+	if (requireRecoveryPolicy && (repository.readOnly || !repository.executionPolicy.enabled || !repository.reviewPolicy.enabled
+		|| !repository.publicationPolicy.enabled || !repository.capabilities.writeCode || !repository.capabilities.writeGitHub)) return false;
 	return publication.status === 'blocked'
 		&& publication.blockedReason === `Remote ${repository.defaultBranch} moved beyond the approved base commit`
 		&& publication.commitSha === undefined && publication.pullNumber === undefined;
@@ -130,6 +137,10 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 	} else if (run.status === 'failed') {
 		lane = 'attention'; phase = 'execution failed'; attention = 'Implementation did not complete successfully.';
 		summary = 'Inspect retained evidence, then start a revised run if appropriate.'; actions = [action('supersede', 'Start revised run', 'primary')];
+	} else if (publication && publicationRecovery?.resolution && staleBaseBlocked(publication, false)) {
+		lane = 'history'; phase = 'superseded by merged publication';
+		summary = 'A later human-merged publication delivered this task; the stale publication and failed replay remain immutable history.';
+		actions = publicationRecovery.supersedingCandidate ? [action('open_pull_request', 'Open merged pull request', 'secondary', publicationRecovery.supersedingCandidate.pullUrl)] : [];
 	} else if (publication && staleBaseBlocked(publication) && !publicationRecovery?.promotedPublicationId) {
 		const rebase = publicationRecovery?.rebase;
 		const replayReview = publicationRecovery?.review;
@@ -144,7 +155,10 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 		} else if (rebase.status === 'blocked') {
 			lane = 'attention'; phase = 'replay blocked'; attention = rebase.detail ?? rebase.blockReason;
 			summary = 'The zero-model stale-base replay could not produce publishable evidence.';
-			actions = [action('replay_publication', 'Retry zero-model replay', 'primary'), action('supersede', 'Start revised run')];
+			actions = [
+				...(publicationRecovery?.supersedingCandidate ? [action('resolve_publication_supersession', 'Mark superseded by merged PR', 'primary')] : [action('replay_publication', 'Retry zero-model replay', 'primary')]),
+				action('supersede', 'Start revised run'),
+		];
 		} else if (!replayReview) {
 			lane = 'review'; phase = 'fresh review required';
 			summary = 'The replay passed current gates and requires one fresh adversarial review before promotion.';
@@ -232,13 +246,13 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 	return v.parse(OperatorBoardCardSchema, {
 		id: run.id, repositoryId: job.repositoryId, workItemKey: job.workItemSnapshot.key,
 		title: job.workItemSnapshot.title, lane, phase, attention, summary,
-		updatedAt: [run.updatedAt, publication?.updatedAt, multiWorker?.updatedAt, publicationRecovery?.rebase?.updatedAt, publicationRecovery?.review?.updatedAt]
+		updatedAt: [run.updatedAt, publication?.updatedAt, multiWorker?.updatedAt, publicationRecovery?.rebase?.updatedAt, publicationRecovery?.review?.updatedAt, publicationRecovery?.resolution?.createdAt]
 			.filter((value): value is string => value !== undefined).sort().at(-1)!,
 		metrics, actions, run, publication, publicationRecovery, multiWorker,
 	});
 }
 
-export function projectOperatorBoard(runs: RunRecord[], publications: DraftPublicationRecord[], now = new Date(), multiWorker: MultiWorkerOperatorEvidence[] = [], rebases: PublicationRebaseRecord[] = [], rebaseReviews: PublicationRebaseReviewRecord[] = []): OperatorBoardView {
+export function projectOperatorBoard(runs: RunRecord[], publications: DraftPublicationRecord[], now = new Date(), multiWorker: MultiWorkerOperatorEvidence[] = [], rebases: PublicationRebaseRecord[] = [], rebaseReviews: PublicationRebaseReviewRecord[] = [], resolutions: PublicationRecoveryResolutionRecord[] = []): OperatorBoardView {
 	const byRun = new Map<string, DraftPublicationRecord>();
 	for (const publication of publications) if (!byRun.has(publication.runId)) byRun.set(publication.runId, publication);
 	const byJob = new Map(multiWorker.map((evidence) => [evidence.jobId, evidence]));
@@ -246,11 +260,20 @@ export function projectOperatorBoard(runs: RunRecord[], publications: DraftPubli
 	const reviewByRebase = new Map<string, PublicationRebaseReviewRecord>();
 	for (const review of rebaseReviews) if (!reviewByRebase.has(review.rebaseId)) reviewByRebase.set(review.rebaseId, review);
 	const promotedByReview = new Map(publications.filter(({ sourceRebaseReviewId }) => sourceRebaseReviewId).map((publication) => [publication.sourceRebaseReviewId!, publication.id]));
+	const resolutionBySource = new Map(resolutions.map((resolution) => [resolution.sourcePublicationId, resolution]));
 	const recoveryByRun = new Map<string, PublicationRecoveryOperatorEvidence>();
 	for (const rebase of rebases) {
 		const source = publicationById.get(rebase.sourcePublicationId); if (!source || recoveryByRun.has(source.runId)) continue;
 		const review = reviewByRebase.get(rebase.id);
-		recoveryByRun.set(source.runId, { sourcePublicationId: source.id, rebase, review, ...(review && promotedByReview.has(review.id) ? { promotedPublicationId: promotedByReview.get(review.id) } : {}) });
+		const resolution = resolutionBySource.get(source.id);
+		const superseding = resolution
+			? publicationById.get(resolution.supersedingPublicationId)
+			: publications.find((candidate) => candidate.id !== source.id && candidate.ownerId === source.ownerId && candidate.repositoryId === source.repositoryId && candidate.title === source.title && candidate.status === 'merged' && candidate.pullNumber && candidate.pullUrl && candidate.createdAt > source.createdAt);
+		recoveryByRun.set(source.runId, {
+			sourcePublicationId: source.id, rebase, review, resolution,
+			...(review && promotedByReview.has(review.id) ? { promotedPublicationId: promotedByReview.get(review.id) } : {}),
+			...(superseding?.pullNumber && superseding.pullUrl ? { supersedingCandidate: { publicationId: superseding.id, pullNumber: superseding.pullNumber, pullUrl: superseding.pullUrl } } : {}),
+		});
 	}
 	return v.parse(OperatorBoardViewSchema, {
 		generatedAt: now.toISOString(),

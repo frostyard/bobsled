@@ -84,6 +84,7 @@ Routes:
 - `POST /api/publication-recoveries/replays/:rebaseId/reviews` (one fresh read-only adversarial review)
 - `POST /api/publication-recoveries/reviews/:reviewId/execute` (resume an admitted pre-dispatch review)
 - `POST /api/publication-recoveries/reviews/:reviewId/promote` (new immutable draft-publication intent)
+- `POST /api/publication-recoveries/resolutions` (immutable zero-call supersession by a later merged publication)
 - `GET /api/github-app/status`
 - `POST /channels/github/webhook` (the `@flue/github` channel; unavailable until its protected secret is configured)
 - `GET/POST /api/github-actions` and `GET /api/github-actions/:actionId`
@@ -161,6 +162,8 @@ M4-A review records live beside the preserved implementation evidence. Copilot r
 M4-B publication is a separate durable outbox. Admission recomputes the preserved patch and binds its digest, approved review, base commit, generated branch, draft-only PR body marker, and required checks. Execution re-verifies those bytes before any token mint, uses repository-scoped Git Data and pull-request permissions, never force-pushes, and reconciles retries only against the exact deterministic commit. Separate read profiles reconcile the exact pull-request lifecycle and required checks; merged or closed PRs become durable History state, while reopened PRs return to their current check state. Bobsled has no merge operation. clix's publication policy remains disabled, while `frostyard/frostyard-org` requires the Cloudflare Workers build before handoff.
 
 Stale-base recovery is a separate immutable evidence path. It can reapply an already approved patch to a verified descendant of its old base, run current preparation and quality gates, and retain exact conflict or drift evidence with zero model calls. A separate one-call read-only Copilot review revalidates that replay in fresh repository context. Only its approval can create a new immutable draft-publication attempt linked to both the replay review and the original blocked publication; the old records are never rewritten. Authenticated, idempotent board actions expose each transition separately; merely loading the board never executes replay, review, promotion, or publication.
+
+If a later human-merged publication already delivered the same repository/task title and the retained replay proves an exact patch conflict, an operator may instead record an immutable `superseded_by_merged_publication` resolution. That decision makes zero model calls and no GitHub mutation, preserves every old row, and moves the obsolete card to History with a link to the merged pull request.
 
 `@flue/github` owns webhook content-type checks, exact-byte HMAC verification, native GitHub event typing, ping acknowledgement, and the conventional channel route. Bobsled's trusted wrapper retains the bounded exact body and durably claims the verified delivery before any later dispatch. The channel does not receive a global outbound token and currently dispatches no agent.
 

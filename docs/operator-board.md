@@ -84,6 +84,8 @@ The card exposes only a valid recovery action. A permanent policy block has **De
 
 A publication enters `History` after GitHub reports that its exact recorded pull request was merged or closed without merge. A merged record is terminal and exposes only **Open pull request**. A closed-without-merge record retains **Refresh status**, because GitHub permits reopening; if reopened, its latest check state places it back in `Delivery` or `Attention`.
 
+A side-effect-free stale publication may also enter `History` through an immutable **Mark superseded by merged PR** decision after its zero-model replay retains an exact patch conflict and a later merged publication matches the repository and task title. The old publication and replay stay unchanged; the resolution performs no model call or GitHub mutation and links the later merged pull request.
+
 ## Multi-worker evidence
 
 When a run has an immutable multi-worker plan, its card and drawer show:

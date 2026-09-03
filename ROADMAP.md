@@ -86,6 +86,9 @@ Post-acceptance hardening:
   - [x] Persist a principal-scoped superseding replay, authenticate the old patch and new base, reapply it in a fresh worktree, and rerun current preparation/gates with zero model calls.
   - [x] Run one fresh read-only adversarial review against the new repository snapshot, then promote only approved replay evidence into a new immutable publication intent.
   - [x] Add authenticated operator orchestration and board evidence for replay, fresh review, and promotion before live use.
+  - [x] Retain an immutable zero-call supersession decision when a later human-merged publication already delivered the task and exact replay conflicts.
+
+Live recovery evidence: the retained canonical/Open Graph publication entered the authenticated replay path after PR #44 deployment. Its first attempt correctly blocked because the trusted checkout was stale; after a clean fast-forward, a superseding replay authenticated the patch and current base, then retained an exact conflict in `src/layouts/Site.astro` with zero model calls. Website PR #7 had already delivered the same task with a different local identifier spelling, so no fresh review or duplicate recovered PR was authorized. Migration 25 records the explicit immutable supersession by that later merged publication instead of leaving the obsolete card permanently actionable.
 
 ### M4-R — Standalone public repository preparation — `DONE`
 
