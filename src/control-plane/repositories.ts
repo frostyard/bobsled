@@ -54,6 +54,14 @@ const enrolled = [
 			gateTimeoutMinutes: 15,
 			workerNetwork: { mode: 'public_dependencies' },
 		},
+		multiWorkerPolicy: {
+			enabled: false,
+			maxConcurrentWorkers: 2,
+			maxWorkerAttempts: 8,
+			maxPreDispatchRetriesPerTask: 1,
+			maxRuntimeMinutes: 60,
+			subscriptionCalls: { openaiCodex: 4, githubCopilot: 2 },
+		},
 		reviewPolicy: {
 			enabled: true,
 			maxRemediationRounds: 1,
@@ -107,6 +115,14 @@ const enrolled = [
 			workerTimeoutMinutes: 20,
 			gateTimeoutMinutes: 15,
 			workerNetwork: { mode: 'none' },
+		},
+		multiWorkerPolicy: {
+			enabled: false,
+			maxConcurrentWorkers: 2,
+			maxWorkerAttempts: 8,
+			maxPreDispatchRetriesPerTask: 1,
+			maxRuntimeMinutes: 60,
+			subscriptionCalls: { openaiCodex: 4, githubCopilot: 2 },
 		},
 		reviewPolicy: {
 			enabled: false,
