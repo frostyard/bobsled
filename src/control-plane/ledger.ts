@@ -26,6 +26,7 @@ import {
 import { getRepository } from './repositories.ts';
 import { projectReviewForOperator } from './operator-review-view.ts';
 import { ensureIntegrationInvocationSchema } from './integration-invocation-store.ts';
+import { ensureIntegrationConflictAgentInvocationSchema } from './integration-conflict-agent-invocation-store.ts';
 import { dataPath } from '../paths.ts';
 
 export interface Principal {
@@ -162,6 +163,7 @@ export class JobLedger {
 			INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'));
 		`);
 		ensureIntegrationInvocationSchema(this.#db);
+		ensureIntegrationConflictAgentInvocationSchema(this.#db);
 	}
 
 	admit(input: unknown, principal: Principal, idempotencyKey: string): RunRecord {
