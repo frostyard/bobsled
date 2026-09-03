@@ -53,3 +53,22 @@ test('serializes concurrent finalization across database connections',()=>{
 		const snapshot=first.finalize(input,principal,'same');assert.equal(second.finalize(input,principal,'same').id,snapshot.id);assert.throws(()=>second.finalize(input,principal,'different'),IntakeBriefSnapshotConflictError);
 	} finally {second.close();first.close();conversations.close();rmSync(root,{recursive:true,force:true});}
 });
+
+test('creates a new correction conversation without rewriting its source snapshot',()=>{
+	const root=mkdtempSync(join(tmpdir(),'bobsled-brief-correction-')),path=join(root,'bobsled.db'),conversations=new IntakeConversationStore(path,now,repository),observer=new IntakeConversationStore(path,now,repository),snapshots=new IntakeBriefSnapshotStore(path,now,conversations);
+	try{
+		const source=conversations.create({repositoryId:brief.repositoryId,seed,brief},principal,'source-conversation');
+		const snapshot=snapshots.finalize({conversationId:source.id,expectedVersion:1,reason:'Operator froze the source brief before requesting a correction.'},principal,'source-snapshot');
+		const reason='Operator identified a correction that belongs in a new immutable snapshot.';
+		const corrected=conversations.correct(source.id,{reason},principal,'correction');
+		assert.equal(corrected.status,'active');assert.equal(corrected.version,1);assert.deepEqual(corrected.seed,seed);assert.deepEqual(corrected.currentBrief,brief);assert.deepEqual(corrected.turns,[]);assert.equal(corrected.supersession?.sourceConversationId,source.id);assert.equal(corrected.supersession?.sourceSnapshotId,snapshot.id);assert.equal(corrected.supersession?.reason,reason);assert.equal(corrected.intakeModelCallAuthorized,false);assert.equal(corrected.runAdmissionAuthorized,false);assert.equal(corrected.githubMutationAuthorized,false);
+		assert.equal(observer.correct(source.id,{reason},principal,'correction').id,corrected.id);
+		assert.throws(()=>observer.correct(source.id,{reason:'Changed input cannot reuse the correction key.'},principal,'correction'),IntakeConversationConflictError);
+		assert.throws(()=>observer.correct(source.id,{reason:'A parallel correction branch must not be created.'},principal,'parallel-correction'),IntakeConversationConflictError);
+		assert.deepEqual(snapshots.get(snapshot.id,principal).brief,brief);
+		const cancelled=conversations.cancel(corrected.id,{expectedVersion:1,reason:'Operator abandoned this correction attempt without changing its source.'},principal);assert.equal(cancelled.status,'cancelled');
+		const retry=observer.correct(source.id,{reason:'Operator explicitly started a replacement after cancelling the prior attempt.'},principal,'correction-retry');assert.equal(retry.status,'active');assert.equal(retry.supersession?.sourceSnapshotId,snapshot.id);
+		const db=new Database(path);try{assert.equal((db.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version=46').get() as {count:number}).count,1);db.prepare("UPDATE intake_conversation_supersessions SET source_brief_sha256=? WHERE conversation_id=?").run('0'.repeat(64),retry.id);}finally{db.close();}
+		assert.throws(()=>observer.get(retry.id,principal),IntakeConversationConflictError);
+	} finally {snapshots.close();observer.close();conversations.close();rmSync(root,{recursive:true,force:true});}
+});

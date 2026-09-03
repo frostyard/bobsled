@@ -80,6 +80,7 @@ test('serves the local factory interface', async () => {
 	assert.match(html, /Live structured brief/);
 	assert.match(html, /Revise brief once/);
 	assert.match(html, /Finalize brief/);
+	assert.match(html, /Start correction/);
 	assert.match(html, /Run independent triage/);
 	assert.match(html, /Admit triaged run/);
 	assert.match(html, /How lane assignment works/);
@@ -119,6 +120,7 @@ test('serves principal-owned conversational intake without implicit model author
 	assert.equal(await (await app.request(`/api/intake-conversations/${created.id}/snapshot/triage`)).json(),null);
 	assert.equal(await (await app.request(`/api/intake-conversations/${created.id}/snapshot/admission`)).json(),null);
 	const prematureAdmission=await app.request(`/api/intake-conversations/${created.id}/snapshot/admission`,{method:'POST',headers:{'content-type':'application/json','idempotency-key':`${key}:premature-admission`},body:'{}'});assert.equal(prematureAdmission.status,409);
+	const correction=await app.request(`/api/intake-conversations/${created.id}/corrections`,{method:'POST',headers:{'content-type':'application/json','idempotency-key':`${key}:correction`},body:JSON.stringify({reason:'Operator identified a correction that requires a new snapshot.'})});assert.equal(correction.status,201);const corrected=await correction.json() as {id:string;version:number;status:string;supersession?:{sourceConversationId:string;sourceSnapshotId:string}};assert.equal(corrected.status,'active');assert.equal(corrected.supersession?.sourceConversationId,created.id);assert.equal(typeof corrected.supersession?.sourceSnapshotId,'string');assert.equal((await app.request(`/api/intake-conversations/${corrected.id}/cancel`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:corrected.version,reason:'Operator cancelled this route-level correction fixture.'})})).status,200);
 	const cancelKey=`${key}:cancel`,cancelledConversation=await (await app.request('/api/intake-conversations',{method:'POST',headers:{'content-type':'application/json','idempotency-key':cancelKey},body:JSON.stringify({repositoryId:brief.repositoryId,seed:{...seed,key:cancelKey},brief})})).json() as {id:string;version:number};
 	const cancelled=await app.request(`/api/intake-conversations/${cancelledConversation.id}/cancel`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:cancelledConversation.version,reason:'Operator stopped this application-route test.'})});assert.equal(cancelled.status,200);assert.equal((await cancelled.json() as {status:string}).status,'cancelled');
 });

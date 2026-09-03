@@ -320,6 +320,11 @@ app.post('/api/intake-conversations/:conversationId/cancel', async (context) => 
 	catch (error) { return intakeConversationError(context, error); }
 });
 
+app.post('/api/intake-conversations/:conversationId/corrections', async (context) => {
+	try { return context.json(intakeConversations.correct(context.req.param('conversationId'),await context.req.json(),context.get('principal'),context.req.header('idempotency-key')??''),201); }
+	catch (error) { return intakeConversationError(context,error); }
+});
+
 app.get('/api/intake-conversations/:conversationId/snapshot', (context) => {
 	try { return context.json(intakeSnapshots.getForConversation(context.req.param('conversationId'), context.get('principal'))); }
 	catch (error) { return intakeConversationError(context, error); }
