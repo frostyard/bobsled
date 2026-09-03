@@ -146,6 +146,18 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 			execution_id TEXT PRIMARY KEY, manifest_sha256 TEXT NOT NULL, manifest_json TEXT NOT NULL, created_at TEXT NOT NULL,
 			FOREIGN KEY(execution_id) REFERENCES multi_repository_publication_executions(id)
 		);
+		CREATE TABLE IF NOT EXISTS multi_repository_publication_recovery_plans (
+			id TEXT PRIMARY KEY, source_execution_id TEXT NOT NULL, authorization_id TEXT NOT NULL,
+			change_set_id TEXT NOT NULL, owner_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+			request_sha256 TEXT NOT NULL, source_execution_sha256 TEXT NOT NULL,
+			result_sha256 TEXT NOT NULL, result_json TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
+			UNIQUE(owner_id, idempotency_key),
+			FOREIGN KEY(source_execution_id) REFERENCES multi_repository_publication_executions(id),
+			FOREIGN KEY(authorization_id) REFERENCES multi_repository_publication_authorizations(id),
+			FOREIGN KEY(change_set_id) REFERENCES multi_repository_change_sets(id)
+		);
+		CREATE INDEX IF NOT EXISTS multi_repository_publication_recovery_plans_source_idx
+			ON multi_repository_publication_recovery_plans(source_execution_id, created_at DESC);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (26, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (27, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (28, datetime('now'));
@@ -159,6 +171,7 @@ export function ensureMultiRepositoryChangeSetSchema(db: Database.Database): voi
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (36, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (37, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (38, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (39, datetime('now'));
 	`);
 	const leaseColumns = new Set((db.prepare('PRAGMA table_info(multi_repository_member_preparation_leases)').all() as Array<{ name: string }>).map(({ name }) => name));
 	if (!leaseColumns.has('started_at')) db.exec('ALTER TABLE multi_repository_member_preparation_leases ADD COLUMN started_at TEXT');
