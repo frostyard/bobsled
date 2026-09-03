@@ -30,6 +30,10 @@ import {
 	MultiRepositoryPublicationExecutionForbiddenError,
 	MultiRepositoryPublicationExecutionStore,
 } from '../src/control-plane/multi-repository-publication-execution-store.ts';
+import {
+	MultiRepositoryPublicationRecoveryForbiddenError,
+	MultiRepositoryPublicationRecoveryStore,
+} from '../src/control-plane/multi-repository-publication-recovery-store.ts';
 import type { DraftPublicationRecord } from '../src/control-plane/publication-contracts.ts';
 import { repositories } from '../src/control-plane/repositories.ts';
 
@@ -137,6 +141,7 @@ function publicationAdapter(authorization: ReturnType<MultiRepositoryPublication
 	const byRepository = new Map(authorization.members.map((member) => [member.repositoryId, member]));
 	return {
 		admitted, executed,
+		setStatus(id: string, status: DraftPublicationRecord['status']) { records.set(id, { ...records.get(id)!, status }); },
 		async admit(input: unknown, owner: { id: string }, key: string) {
 			const request = input as { runId: string; reason: string };
 			const repositoryId = key.split(':').at(-1)!;
@@ -347,6 +352,28 @@ test('preflights all members before mutation and stops dependency rollout on par
 			assert.deepEqual(adapter.executed, ['frostyard/clix', 'frostyard/frostyard-org']);
 			assert.equal(result.result?.members[0]?.status, 'published'); assert.equal(result.result?.members[1]?.status, 'failed');
 			assert.equal((await service.run(execution.id, principal.id)).status, 'partial'); assert.equal(adapter.executed.length, 2);
+
+			const recoveries = new MultiRepositoryPublicationRecoveryStore(partialValue.path, now, prepared.policy, store, adapter.get);
+			try {
+				const recovery = recoveries.admit({ sourceExecutionId: execution.id, reason: 'Inspect the partial rollout before any explicit retry.' }, principal, 'partial-recovery');
+				assert.equal(recovery.result.status, 'retryable');
+				assert.deepEqual(recovery.result.retryOrder, ['frostyard/frostyard-org']);
+				assert.deepEqual(recovery.result.rollbackOrder.map(({ repositoryId, action }) => [repositoryId, action]), [['frostyard/clix', 'human_close_or_revert']]);
+				assert.equal(recovery.result.retryExecutionAuthorized, false); assert.equal(recovery.result.rollbackExecutionAuthorized, false);
+				assert.equal(recoveries.admit({ sourceExecutionId: execution.id, reason: 'Inspect the partial rollout before any explicit retry.' }, principal, 'partial-recovery').id, recovery.id);
+				assert.throws(() => recoveries.get(recovery.id, { id: 'operator:other' }), MultiRepositoryPublicationRecoveryForbiddenError);
+
+				adapter.setStatus(result.result!.members[0]!.publicationId, 'merged');
+				const progressed = recoveries.admit({ sourceExecutionId: execution.id, reason: 'Reinspect linked publication state after external progress.' }, principal, 'progressed-recovery');
+				assert.equal(progressed.result.status, 'operator_decision_required');
+				assert.match(progressed.result.violations[0] ?? '', /already merged/);
+				const db = new Database(partialValue.path);
+				try {
+					assert.equal((db.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version=39').get() as { count: number }).count, 1);
+					db.prepare("UPDATE multi_repository_publication_recovery_plans SET result_json='{}' WHERE id=?").run(progressed.id);
+				} finally { db.close(); }
+				assert.throws(() => recoveries.get(progressed.id, principal), /malformed|integrity/);
+			} finally { recoveries.close(); }
 		} finally { service.close(); store.close(); }
 	} finally { rmSync(partialValue.root, { recursive: true, force: true }); }
 });
