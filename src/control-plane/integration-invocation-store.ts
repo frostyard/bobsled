@@ -219,10 +219,22 @@ export class IntegrationInvocationStore {
 		if (!idempotencyKey || idempotencyKey.length > 200) throw new Error('A bounded idempotency key is required');
 		const requestHash = hash(reservation);
 		return this.#db.transaction(() => {
-			const parent = this.#db.prepare(`SELECT multi_worker_plans.owner_id, multi_worker_plans.plan_sha256,
-				integration_assemblies.task_id, integration_assemblies.status
-				FROM integration_assemblies JOIN multi_worker_plans ON multi_worker_plans.id = integration_assemblies.plan_id
-				WHERE integration_assemblies.id = ?`).get(reservation.assemblyId) as {
+			const parent = this.#db.prepare(`WITH assembly_candidates AS (
+				SELECT integration_assemblies.id, integration_assemblies.plan_id,
+					integration_assemblies.task_id, integration_assemblies.status
+				FROM integration_assemblies
+				UNION ALL
+				SELECT integration_conflict_promotions.id, source_assemblies.plan_id,
+					source_assemblies.task_id, 'assembled'
+				FROM integration_conflict_promotions
+				JOIN integration_conflict_resolutions ON integration_conflict_resolutions.id = integration_conflict_promotions.resolution_id
+				JOIN integration_assemblies AS source_assemblies ON source_assemblies.id = integration_conflict_resolutions.source_assembly_id
+				WHERE integration_conflict_promotions.status = 'promoted'
+			)
+			SELECT multi_worker_plans.owner_id, multi_worker_plans.plan_sha256,
+				assembly_candidates.task_id, assembly_candidates.status
+			FROM assembly_candidates JOIN multi_worker_plans ON multi_worker_plans.id = assembly_candidates.plan_id
+			WHERE assembly_candidates.id = ?`).get(reservation.assemblyId) as {
 					owner_id: string; plan_sha256: string; task_id: string; status: string;
 				} | undefined;
 			if (!parent) throw new IntegrationInvocationConflictError('Integration assembly has no durable parent');
@@ -399,11 +411,23 @@ export class IntegrationInvocationStore {
 
 	getParentContext(integrationAttemptId: string, ownerId: string): IntegrationParentContext {
 		this.get(integrationAttemptId, ownerId);
-		const row = this.#db.prepare(`SELECT integration_assemblies.result_json, jobs.policy_snapshot_json,
+		const row = this.#db.prepare(`WITH assembly_candidates AS (
+			SELECT integration_assemblies.id, integration_assemblies.plan_id,
+				integration_assemblies.status, integration_assemblies.result_json
+			FROM integration_assemblies
+			UNION ALL
+			SELECT integration_conflict_promotions.id, source_assemblies.plan_id,
+				'assembled', integration_conflict_promotions.assembly_json
+			FROM integration_conflict_promotions
+			JOIN integration_conflict_resolutions ON integration_conflict_resolutions.id = integration_conflict_promotions.resolution_id
+			JOIN integration_assemblies AS source_assemblies ON source_assemblies.id = integration_conflict_resolutions.source_assembly_id
+			WHERE integration_conflict_promotions.status = 'promoted' AND integration_conflict_promotions.assembly_json IS NOT NULL
+		)
+			SELECT assembly_candidates.result_json, jobs.policy_snapshot_json,
 			jobs.work_item_snapshot_json, multi_worker_plans.base_commit, multi_worker_plans.plan_json
 			FROM integration_invocations
-			JOIN integration_assemblies ON integration_assemblies.id = integration_invocations.assembly_id
-			JOIN multi_worker_plans ON multi_worker_plans.id = integration_assemblies.plan_id
+			JOIN assembly_candidates ON assembly_candidates.id = integration_invocations.assembly_id
+			JOIN multi_worker_plans ON multi_worker_plans.id = assembly_candidates.plan_id
 			JOIN jobs ON jobs.id = multi_worker_plans.job_id
 			WHERE integration_invocations.id = ?`).get(integrationAttemptId) as {
 				result_json: string; policy_snapshot_json: string; work_item_snapshot_json: string;
