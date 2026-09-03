@@ -26,11 +26,15 @@ Schemas validate both the TypeScript boundary and runtime data. Model decisions 
 5. The Flue triage agent receives immutable initial data, produces one `TriageDecision`, and emits it through a schema-validated data writer.
 6. The server validates the returned decision again and displays it. Nothing is written to GitHub.
 
-## Future multi-repository model
+## M6 multi-repository model
 
 A multi-repository request becomes one `ChangeSet` containing a dependency graph and one repository-scoped `Job` per target. Each job retains its own policy, workspace, gates, review, branch, and PR. The coordinator may order or block jobs but may not collapse their evidence or claim atomicity GitHub cannot provide.
 
 Cross-repository publication is a barrier, not a distributed transaction: Bobsled holds draft publication until all jobs are publishable, then creates linked draft PRs and exposes partial failures explicitly.
+
+The first M6 boundary is a versioned, schema-validated change-set plan rather than an executor. Each repository has a bounded objective, acceptance criteria, explicit dependencies, and one typed compatibility contract per dependency. Contracts classify API, schema, artifact, runtime, or documentation coupling and include concrete verification criteria. The graph reuses M5's deterministic dependency implementation, so duplicate repositories or edges, missing targets, self-dependencies, cycles, and dependency/contract mismatches fail before readiness projection.
+
+Readiness resolves every participant against enabled enrollment and requires every repository pair in the change set to mutually list the other in `multiRepo.coordinateWith`; two independent roots cannot bypass coordination policy merely because no edge connects them. It returns deterministic dependency-first layers and typed enrollment/policy violations. `executionAuthorized` and `publicationAuthorized` are always false: this contract creates no durable job, policy snapshot, workspace, model call, branch, PR, rollout, or merge authority. Later M6 migrations must attach one independent lineage per repository before any work can begin.
 
 ## M5 multi-worker planning
 
