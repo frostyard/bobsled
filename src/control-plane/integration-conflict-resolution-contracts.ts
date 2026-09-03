@@ -23,12 +23,13 @@ const ResolutionResultEntries = {
 	taskId: WorkPlanTaskIdSchema,
 	baseCommit: GitObjectIdSchema,
 	workspacePath: v.pipe(v.string(), v.minLength(1)),
-	strategy: v.literal('git_three_way'),
+	strategy: v.picklist(['git_three_way', 'codex_one_call']),
+	sourceResolutionId: v.optional(v.pipe(v.string(), v.uuid())),
 	appliedTaskIds: v.pipe(v.array(WorkPlanTaskIdSchema), v.maxLength(31)),
 	changedPaths: v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(500))), v.maxLength(100)),
 	conflictPaths: v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(500))), v.maxLength(100)),
 	replayManifest: v.optional(IntegrationConflictReplayManifestSchema),
-	modelCalls: v.literal(0),
+	modelCalls: v.union([v.literal(0), v.literal(1)]),
 	workerAuthorized: v.literal(false),
 };
 
@@ -41,7 +42,12 @@ export const IntegrationConflictResolutionResultSchema = v.pipe(v.variant('statu
 	v.object({
 		...ResolutionResultEntries,
 		status: v.literal('blocked'),
-		reason: v.picklist(['unresolved_conflict', 'patch_rejected', 'changed_path_mismatch', 'head_moved']),
+		reason: v.picklist([
+			'unresolved_conflict', 'patch_rejected', 'changed_path_mismatch', 'head_moved',
+			'worker_blocked', 'unmerged_paths', 'non_conflict_changed', 'reported_paths_mismatch',
+			'unstaged_changes', 'conflict_markers', 'remaining_patch_rejected',
+			'file_limit', 'diff_limit', 'protected_path',
+		]),
 		failedTaskId: v.optional(WorkPlanTaskIdSchema),
 		detail: v.pipe(v.string(), v.maxLength(10_000)),
 	}),
@@ -62,6 +68,11 @@ export const IntegrationConflictResolutionResultSchema = v.pipe(v.variant('statu
 	(result) => result.replayManifest === undefined
 		|| result.appliedTaskIds.every((taskId, index) => result.replayManifest?.orderedPatches[index]?.taskId === taskId),
 	'Applied conflict tasks must be a prefix of the replay manifest',
+), v.check(
+	(result) => result.strategy === 'git_three_way'
+		? result.modelCalls === 0 && result.sourceResolutionId === undefined
+		: result.modelCalls === 1 && result.sourceResolutionId !== undefined && result.replayManifest !== undefined,
+	'Conflict-resolution strategy must agree with model use and source lineage',
 ));
 
 export type IntegrationConflictResolutionResult = v.InferOutput<typeof IntegrationConflictResolutionResultSchema>;

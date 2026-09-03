@@ -35,7 +35,7 @@ export const IntegrationConflictResolutionParentSchema = v.object({
 	resolutionId: v.pipe(v.string(), v.uuid()),
 	sourceAssemblyId: v.pipe(v.string(), v.uuid()),
 	ownerId: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
-	strategy: v.literal('git_three_way'),
+	strategy: v.picklist(['git_three_way', 'codex_one_call']),
 	status: v.picklist(['resolved', 'blocked']),
 	result: IntegrationConflictResolutionResultSchema,
 	createdAt: v.string(),
@@ -259,6 +259,9 @@ export class MultiWorkerParentStore {
 			sourceAssemblyId: v.pipe(v.string(), v.uuid()),
 			result: IntegrationConflictResolutionResultSchema,
 		}), input);
+		if (request.result.strategy !== 'git_three_way') {
+			throw new MultiWorkerParentConflictError('Agent conflict evidence must settle through its one-use invocation');
+		}
 		return this.#db.transaction(() => {
 			const source = this.getAssembly(request.sourceAssemblyId, ownerId);
 			if (source.result.status !== 'blocked' || source.result.reason !== 'patch_rejected' || !source.result.failedTaskId) {

@@ -13,6 +13,10 @@ import {
 	IntegrationConflictAgentPreflightResultSchema,
 	type IntegrationConflictAgentPreflightResult,
 } from './integration-conflict-agent-preflight-contracts.ts';
+import {
+	IntegrationConflictAgentRunEvidenceSchema,
+	type IntegrationConflictAgentOutcome,
+} from './integration-conflict-agent-contracts.ts';
 import { ensureMultiWorkerParentSchema } from './multi-worker-parent-store.ts';
 import { MultiWorkerPlanV2Schema, WorkPlanTaskIdSchema, type MultiWorkerPlanV2 } from './work-plan-contracts.ts';
 
@@ -38,6 +42,11 @@ export const IntegrationConflictAgentInvocationSchema = v.pipe(v.object({
 		claimedAt: v.string(),
 		createdAt: v.optional(v.string()),
 	})),
+	workerRun: v.optional(v.object({
+		evidence: IntegrationConflictAgentRunEvidenceSchema,
+		createdAt: v.string(),
+	})),
+	resolution: v.optional(IntegrationConflictResolutionResultSchema),
 }), v.check(
 	(lease) => lease.status === 'running' ? lease.modelCalls === 1 : true,
 	'A running conflict-agent invocation must retain its sole model claim',
@@ -112,8 +121,13 @@ export function ensureIntegrationConflictAgentInvocationSchema(db: Database.Data
 			invocation_id TEXT PRIMARY KEY, result_json TEXT, claimed_at TEXT NOT NULL, created_at TEXT,
 			FOREIGN KEY(invocation_id) REFERENCES integration_conflict_agent_invocations(id)
 		);
+		CREATE TABLE IF NOT EXISTS integration_conflict_agent_runs (
+			invocation_id TEXT PRIMARY KEY, evidence_json TEXT NOT NULL, created_at TEXT NOT NULL,
+			FOREIGN KEY(invocation_id) REFERENCES integration_conflict_agent_invocations(id)
+		);
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (17, datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (18, datetime('now'));
+		INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (19, datetime('now'));
 	`);
 }
 
@@ -260,7 +274,73 @@ export class IntegrationConflictAgentInvocationStore {
 	}
 
 	failClaimed(agentAttemptId: string, ownerId: string, detail: string): IntegrationConflictAgentInvocation {
-		return this.#settle(agentAttemptId, ownerId, 'failed', 1, detail);
+		const evidence = v.parse(IntegrationConflictAgentRunEvidenceSchema, { status: 'failed', detail });
+		return this.#db.transaction(() => {
+			const lease = this.get(agentAttemptId, ownerId);
+			if (lease.status !== 'running' || lease.modelCalls !== 1 || lease.workerRun) {
+				throw new IntegrationConflictAgentInvocationConflictError('Only a running conflict-agent invocation can fail');
+			}
+			const timestamp = this.#now().toISOString();
+			this.#db.prepare('INSERT INTO integration_conflict_agent_runs (invocation_id, evidence_json, created_at) VALUES (?, ?, ?)')
+				.run(agentAttemptId, JSON.stringify(evidence), timestamp);
+			const changed = this.#db.prepare(`UPDATE integration_conflict_agent_invocations
+				SET status = 'failed', detail = ?, finished_at = ?
+				WHERE id = ? AND owner_id = ? AND status = 'running' AND model_calls = 1`)
+				.run(detail, timestamp, agentAttemptId, ownerId);
+			if (changed.changes !== 1) throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent failure was settled concurrently');
+			return this.get(agentAttemptId, ownerId);
+		})();
+	}
+
+	complete(
+		agentAttemptId: string,
+		ownerId: string,
+		workerOutcome: IntegrationConflictAgentOutcome,
+		inputResolution: IntegrationConflictResolutionResult,
+	): IntegrationConflictAgentInvocation {
+		const evidence = v.parse(IntegrationConflictAgentRunEvidenceSchema, { status: 'completed', receipt: workerOutcome });
+		const resolution = v.parse(IntegrationConflictResolutionResultSchema, inputResolution);
+		return this.#db.transaction(() => {
+			const lease = this.get(agentAttemptId, ownerId);
+			if (lease.status !== 'running' || lease.modelCalls !== 1 || lease.workerRun || lease.resolution) {
+				throw new IntegrationConflictAgentInvocationConflictError('Only a running conflict-agent invocation can complete');
+			}
+			if (
+				resolution.resolutionId !== agentAttemptId
+				|| resolution.sourceResolutionId !== lease.sourceResolutionId
+				|| resolution.sourceAssemblyId !== lease.sourceAssemblyId
+				|| resolution.taskId !== lease.taskId
+				|| resolution.strategy !== 'codex_one_call'
+				|| resolution.modelCalls !== 1
+				|| resolution.workspacePath !== lease.preflight?.result?.workspacePath
+			) throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent result does not match its one-use durable lineage');
+			if (resolution.status === 'resolved' && workerOutcome.result.disposition !== 'resolved') {
+				throw new IntegrationConflictAgentInvocationConflictError('Resolved trusted evidence requires a resolved worker receipt');
+			}
+			if (resolution.status === 'resolved'
+				&& !sameUniquePaths(workerOutcome.result.resolvedPaths, lease.preflight?.result?.conflictPaths ?? [])) {
+				throw new IntegrationConflictAgentInvocationConflictError('Resolved worker receipt paths do not match trusted conflict paths');
+			}
+			const timestamp = this.#now().toISOString();
+			try {
+				this.#db.prepare(`INSERT INTO integration_conflict_resolutions
+					(id, source_assembly_id, owner_id, strategy, status, result_json, created_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+					resolution.resolutionId, resolution.sourceAssemblyId, ownerId, resolution.strategy,
+					resolution.status, JSON.stringify(resolution), timestamp,
+				);
+				this.#db.prepare('INSERT INTO integration_conflict_agent_runs (invocation_id, evidence_json, created_at) VALUES (?, ?, ?)')
+					.run(agentAttemptId, JSON.stringify(evidence), timestamp);
+			} catch (error) {
+				throw new IntegrationConflictAgentInvocationConflictError(`Conflict-agent completion conflicts with existing evidence: ${error instanceof Error ? error.message : 'database constraint'}`);
+			}
+			const changed = this.#db.prepare(`UPDATE integration_conflict_agent_invocations
+				SET status = ?, finished_at = ?, detail = ?
+				WHERE id = ? AND owner_id = ? AND status = 'running' AND model_calls = 1`)
+				.run(resolution.status, timestamp, resolution.status === 'blocked' ? resolution.detail : null, agentAttemptId, ownerId);
+			if (changed.changes !== 1) throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent completion was settled concurrently');
+			return this.get(agentAttemptId, ownerId);
+		})();
 	}
 
 	get(agentAttemptId: string, ownerId: string): IntegrationConflictAgentInvocation {
@@ -272,6 +352,10 @@ export class IntegrationConflictAgentInvocationStore {
 			FROM integration_conflict_agent_preflights WHERE invocation_id = ?`).get(agentAttemptId) as {
 				result_json: string | null; claimed_at: string; created_at: string | null;
 			} | undefined;
+		const workerRow = this.#db.prepare('SELECT evidence_json, created_at FROM integration_conflict_agent_runs WHERE invocation_id = ?')
+			.get(agentAttemptId) as { evidence_json: string; created_at: string } | undefined;
+		const resolutionRow = this.#db.prepare('SELECT result_json FROM integration_conflict_resolutions WHERE id = ?')
+			.get(agentAttemptId) as { result_json: string } | undefined;
 		return v.parse(IntegrationConflictAgentInvocationSchema, {
 			agentAttemptId: row.id, sourceResolutionId: row.source_resolution_id,
 			sourceAssemblyId: row.source_assembly_id, ownerId: row.owner_id, taskId: row.task_id,
@@ -282,6 +366,8 @@ export class IntegrationConflictAgentInvocationStore {
 				result: preflightRow.result_json ? JSON.parse(preflightRow.result_json) : undefined,
 				claimedAt: preflightRow.claimed_at, createdAt: preflightRow.created_at ?? undefined,
 			} : undefined,
+			workerRun: workerRow ? { evidence: JSON.parse(workerRow.evidence_json), createdAt: workerRow.created_at } : undefined,
+			resolution: resolutionRow ? JSON.parse(resolutionRow.result_json) : undefined,
 		});
 	}
 
@@ -345,4 +431,9 @@ export class IntegrationConflictAgentInvocationStore {
 			return this.get(agentAttemptId, ownerId);
 		})();
 	}
+}
+
+function sameUniquePaths(left: readonly string[], right: readonly string[]): boolean {
+	return left.length === new Set(left).size && right.length === new Set(right).size
+		&& [...left].sort().join('\0') === [...right].sort().join('\0');
 }

@@ -24,6 +24,7 @@ import {
 	runIntegrationCommand,
 	type IntegrationCommandRunner,
 } from './integration-command-service.ts';
+import { conflictNonTargetStateSha256, conflictTargetStateSha256 } from './integration-conflict-state.ts';
 
 const execFileAsync = promisify(execFile);
 const MAX_PATCH_BYTES = 512 * 1024;
@@ -168,6 +169,13 @@ export class IntegrationConflictAgentPreflightService {
 			headCommit: preparedHead, appliedTaskIds: [], changedPaths: preparedPaths, conflictPaths: [],
 		}, ['preparation_changed_workspace'], 'Repository preparation changed the clean replay workspace');
 
+		for (const [index, entry] of manifest.orderedPatches.entries()) {
+			await writeFile(
+				resolve(evidencePath, `${String(index + 1).padStart(2, '0')}-${entry.taskId}.patch`),
+				patches[index] ?? '',
+				{ mode: 0o600 },
+			);
+		}
 		const appliedTaskIds: string[] = [];
 		for (const [index, entry] of manifest.orderedPatches.entries()) {
 			const patch = patches[index] ?? '';
@@ -180,7 +188,6 @@ export class IntegrationConflictAgentPreflightService {
 				continue;
 			}
 			const patchPath = resolve(evidencePath, `${String(index + 1).padStart(2, '0')}-${entry.taskId}.patch`);
-			await writeFile(patchPath, patch, { mode: 0o600 });
 			const applied = await this.#gitResult(workspacePath, ['apply', '--3way', '--index', '--', patchPath]);
 			if (applied.exitCode === 0) {
 				appliedTaskIds.push(entry.taskId);
@@ -199,10 +206,13 @@ export class IntegrationConflictAgentPreflightService {
 				workspacePath, baseCommit: context.baseCommit, preparation, headCommit: headCommit || undefined,
 				appliedTaskIds, failedTaskId: entry.taskId, changedPaths, conflictPaths,
 			}, violations, 'Fresh replay did not exactly reproduce trusted conflict evidence');
+			const nonConflictStateSha256 = await conflictNonTargetStateSha256(workspacePath, conflictPaths);
+			const conflictStateSha256 = await conflictTargetStateSha256(workspacePath, conflictPaths);
 			return this.#complete(agentAttemptId, ownerId, {
 				agentAttemptId, sourceResolutionId: source.resolutionId, baseCommit: context.baseCommit,
 				workspacePath, preparation, headCommit, appliedTaskIds, failedTaskId: entry.taskId,
-				changedPaths, conflictPaths, modelCalls: 0, workerAuthorized: false,
+				changedPaths, conflictPaths, nonConflictStateSha256, conflictStateSha256,
+				modelCalls: 0, workerAuthorized: false,
 				status: 'passed', violations: [],
 			});
 		}

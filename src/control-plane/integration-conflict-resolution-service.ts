@@ -107,11 +107,17 @@ export class IntegrationConflictResolutionService {
 		}
 		await mkdir(evidencePath, { recursive: true, mode: 0o700 });
 		await this.#git(source, ['worktree', 'add', '--detach', workspacePath, plan.baseCommit]);
+		for (const [index, payload] of payloads.entries()) {
+			await writeFile(
+				resolve(evidencePath, `${String(index + 1).padStart(2, '0')}-${payload.taskId}.patch`),
+				payload.patch,
+				{ mode: 0o600 },
+			);
+		}
 
 		const appliedTaskIds: string[] = [];
 		for (const [index, payload] of payloads.entries()) {
 			const patchPath = resolve(evidencePath, `${String(index + 1).padStart(2, '0')}-${payload.taskId}.patch`);
-			await writeFile(patchPath, payload.patch, { mode: 0o600 });
 			if (payload.patch.length === 0) {
 				if ((plan.orderedPatches[index]?.changedPaths.length ?? 0) !== 0) {
 					throw new IntegrationConflictResolutionError(`Empty patch payload claims changed paths: ${payload.taskId}`);

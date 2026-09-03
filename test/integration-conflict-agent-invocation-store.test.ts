@@ -92,7 +92,9 @@ function passPreflight(store: IntegrationConflictAgentInvocationStore, agentAtte
 			durationMs: 1, stdout: '', stderr: '', truncated: false,
 		},
 		headCommit: baseCommit, appliedTaskIds: [], failedTaskId: 'one', changedPaths: ['shared.txt'],
-		conflictPaths: ['shared.txt'], modelCalls: 0, workerAuthorized: false, status: 'passed', violations: [],
+		conflictPaths: ['shared.txt'], nonConflictStateSha256: 'd'.repeat(64),
+		conflictStateSha256: 'e'.repeat(64),
+		modelCalls: 0, workerAuthorized: false, status: 'passed', violations: [],
 	});
 }
 
