@@ -79,6 +79,7 @@ test('serves the local factory interface', async () => {
 	assert.match(html, /Conversational intake/);
 	assert.match(html, /Live structured brief/);
 	assert.match(html, /Revise brief once/);
+	assert.match(html, /Finalize brief/);
 	assert.match(html, /How lane assignment works/);
 	assert.match(html, /Admitted run is pending authorization/);
 	assert.match(html, /data-lane="attention"/);
@@ -112,7 +113,9 @@ test('serves principal-owned conversational intake without implicit model author
 	assert.equal((await app.request(`/api/intake-conversations/${created.id}`)).status,200);const listed=await (await app.request('/api/intake-conversations')).json() as Array<{id:string}>;assert.equal(listed.some(({id})=>id===created.id),true);
 	assert.deepEqual(await (await app.request(`/api/intake-conversations/${created.id}/revisions`)).json(),[]);
 	const missingKey=await app.request(`/api/intake-conversations/${created.id}/revisions`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:1,message:'Clarify the audience.'})});assert.equal(missingKey.status,409);
-	const cancelled=await app.request(`/api/intake-conversations/${created.id}/cancel`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:1,reason:'Operator stopped this application-route test.'})});assert.equal(cancelled.status,200);assert.equal((await cancelled.json() as {status:string}).status,'cancelled');
+	const finalized=await app.request(`/api/intake-conversations/${created.id}/finalize`,{method:'POST',headers:{'content-type':'application/json','idempotency-key':`${key}:final`},body:JSON.stringify({expectedVersion:1,reason:'Operator confirmed this application-route brief for triage.'})});assert.equal(finalized.status,201);const payload=await finalized.json() as {snapshot:{briefSha256:string;triageAuthorized:boolean;runAdmissionAuthorized:boolean};conversation:{status:string;version:number}};assert.equal(payload.conversation.status,'finalized');assert.equal(payload.conversation.version,2);assert.equal(payload.snapshot.briefSha256.length,64);assert.equal(payload.snapshot.triageAuthorized,false);assert.equal(payload.snapshot.runAdmissionAuthorized,false);assert.equal((await app.request(`/api/intake-conversations/${created.id}/snapshot`)).status,200);
+	const cancelKey=`${key}:cancel`,cancelledConversation=await (await app.request('/api/intake-conversations',{method:'POST',headers:{'content-type':'application/json','idempotency-key':cancelKey},body:JSON.stringify({repositoryId:brief.repositoryId,seed:{...seed,key:cancelKey},brief})})).json() as {id:string;version:number};
+	const cancelled=await app.request(`/api/intake-conversations/${cancelledConversation.id}/cancel`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedVersion:cancelledConversation.version,reason:'Operator stopped this application-route test.'})});assert.equal(cancelled.status,200);assert.equal((await cancelled.json() as {status:string}).status,'cancelled');
 });
 
 test('creates RFC 4122 UUIDs when randomUUID is unavailable over private HTTP', async () => {
