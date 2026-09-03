@@ -1,14 +1,9 @@
-import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { mkdir, realpath } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { promisify } from 'node:util';
 import * as v from 'valibot';
 import {
 	evaluateIntegrationWorker,
 	IntegrationWorkerInitialDataSchema,
-	IntegrationWorkerInspectionSchema,
-	type IntegrationWorkerInspection,
 } from './integration-worker-contracts.ts';
 import {
 	runIntegrationWorker,
@@ -21,75 +16,17 @@ import {
 } from './integration-invocation-store.ts';
 import { IntegrationPreflightService } from './integration-preflight-service.ts';
 import { IntegrationPreflightResultSchema } from './integration-preflight-contracts.ts';
+import { IntegrationPreparationService } from './integration-preparation-service.ts';
+import {
+	inspectIntegrationWorkerWorkspace,
+	type IntegrationWorkerInspector,
+} from './integration-workspace-inspection.ts';
 
-const execFileAsync = promisify(execFile);
-const MAX_GIT_OUTPUT_BYTES = 4 * 1024 * 1024;
-
-export type IntegrationWorkerInspector = (workspacePath: string) => Promise<IntegrationWorkerInspection>;
-
-function nulList(value: string): string[] {
-	return value.split('\0').filter(Boolean);
-}
-
-async function git(workspacePath: string, args: string[], trim = true): Promise<string> {
-	const result = await execFileAsync('git', args, {
-		cwd: workspacePath,
-		timeout: 60_000,
-		maxBuffer: MAX_GIT_OUTPUT_BYTES,
-		encoding: 'utf8',
-		env: { PATH: process.env.PATH ?? '', LANG: process.env.LANG ?? 'C.UTF-8', GIT_TERMINAL_PROMPT: '0' },
-	});
-	return trim ? result.stdout.trim() : result.stdout;
-}
-
-function countDiffLines(numstat: string): number {
-	let total = 0;
-	for (const line of numstat.split('\n').filter(Boolean)) {
-		const [added, deleted] = line.split('\t', 3);
-		if (added !== '-' && deleted !== '-') total += Number(added) + Number(deleted);
-	}
-	return total;
-}
-
-export const inspectIntegrationWorkerWorkspace: IntegrationWorkerInspector = async (workspacePath) => {
-	const root = await realpath(workspacePath);
-	const topLevel = await realpath(await git(root, ['rev-parse', '--show-toplevel']));
-	if (topLevel !== root) throw new Error('Integration workspace must be the Git worktree root');
-	const [headCommit, stagedPatch, untracked] = await Promise.all([
-		git(root, ['rev-parse', 'HEAD']),
-		git(root, ['diff', '--binary', '--no-ext-diff', '--no-renames', '--cached', 'HEAD', '--'], false),
-		git(root, ['ls-files', '--others', '--exclude-standard', '-z', '--'], false).then(nulList),
-	]);
-	if (untracked.length > 100) throw new Error('Integration worker produced more than 100 untracked paths');
-	if (untracked.length > 0) await git(root, ['add', '-N', '--', ...untracked]);
-	let finalPatch: string;
-	let workerChangedPaths: string[];
-	let finalChangedPaths: string[];
-	let diffLines: number;
-	try {
-		[finalPatch, workerChangedPaths, finalChangedPaths, diffLines] = await Promise.all([
-			git(root, ['diff', '--binary', '--no-ext-diff', '--no-renames', 'HEAD', '--'], false),
-			git(root, ['diff', '--name-only', '-z', '--no-renames', '--'], false).then(nulList),
-			git(root, ['diff', '--name-only', '-z', '--no-renames', 'HEAD', '--'], false).then(nulList),
-			git(root, ['diff', '--numstat', '--no-renames', 'HEAD', '--'], false).then(countDiffLines),
-		]);
-	} finally {
-		if (untracked.length > 0) await git(root, ['reset', '--quiet', '--', ...untracked]);
-	}
-	const restoredStagedPatch = await git(root, ['diff', '--binary', '--no-ext-diff', '--no-renames', '--cached', 'HEAD', '--'], false);
-	if (restoredStagedPatch !== stagedPatch) throw new Error('Trusted inspection failed to restore the staged prerequisite stack');
-	return v.parse(IntegrationWorkerInspectionSchema, {
-		headCommit,
-		stagedPatchSha256: createHash('sha256').update(stagedPatch).digest('hex'),
-		workerChangedPaths,
-		finalChangedPaths,
-		diffLines,
-		finalPatchSha256: createHash('sha256').update(finalPatch).digest('hex'),
-	});
-};
+export { inspectIntegrationWorkerWorkspace } from './integration-workspace-inspection.ts';
 
 export interface IntegrationOrchestrationOptions {
 	preflight?: IntegrationPreflightService;
+	preparation?: IntegrationPreparationService;
 	gates?: IntegrationGateService;
 	worker?: IntegrationWorkerRunner;
 	inspector?: IntegrationWorkerInspector;
@@ -100,6 +37,7 @@ export interface IntegrationOrchestrationOptions {
 
 export class IntegrationOrchestrationService {
 	readonly #preflight: IntegrationPreflightService;
+	readonly #preparation: IntegrationPreparationService;
 	readonly #gates: IntegrationGateService;
 	readonly #worker: IntegrationWorkerRunner;
 	readonly #inspector: IntegrationWorkerInspector;
@@ -109,6 +47,11 @@ export class IntegrationOrchestrationService {
 
 	constructor(private readonly store: IntegrationInvocationStore, options: IntegrationOrchestrationOptions = {}) {
 		this.#preflight = options.preflight ?? new IntegrationPreflightService(store);
+		this.#preparation = options.preparation ?? new IntegrationPreparationService(store, {
+			toolDataRoot: options.toolDataRoot,
+			executablePath: options.executablePath,
+			now: options.now,
+		});
 		this.#gates = options.gates ?? new IntegrationGateService(store);
 		this.#worker = options.worker ?? runIntegrationWorker;
 		this.#inspector = options.inspector ?? inspectIntegrationWorkerWorkspace;
@@ -118,7 +61,7 @@ export class IntegrationOrchestrationService {
 	}
 
 	async execute(integrationAttemptId: string, ownerId: string): Promise<IntegrationInvocationLease> {
-		const before = this.store.get(integrationAttemptId, ownerId);
+		let before = this.store.get(integrationAttemptId, ownerId);
 		if (!before.preflight) {
 			const parent = (() => {
 				try { return this.store.getParentContext(integrationAttemptId, ownerId); } catch { return undefined; }
@@ -136,6 +79,11 @@ export class IntegrationOrchestrationService {
 				}
 			}
 		}
+		if (!before.preparation && (before.status === 'reserved' || before.status === 'preparing')) {
+			before = await this.#preparation.run(integrationAttemptId, ownerId);
+			if (before.status !== 'reserved') return before;
+		}
+		if (!before.preflight && before.status !== 'reserved') return before;
 		const claim = await this.#preflight.run(integrationAttemptId, ownerId);
 		let lease = claim.lease;
 		if (!claim.newlyClaimed) {
