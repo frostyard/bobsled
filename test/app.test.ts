@@ -202,6 +202,7 @@ test('GitHub mode exposes only the bounded unauthenticated ingress paths', async
 		assert.equal((await app.request('https://factory.example/api/github-app/authority')).status, 401);
 		assert.equal((await app.request('https://factory.example/api/observability/status')).status, 401);
 		assert.equal((await app.request('https://factory.example/api/operator-board')).status, 401);
+		assert.equal((await app.request('https://factory.example/api/publication-recoveries/replays', { method: 'POST' })).status, 401);
 	});
 });
 

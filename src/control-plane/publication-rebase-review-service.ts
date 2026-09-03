@@ -166,6 +166,10 @@ export class PublicationRebaseReviewService {
 		return rowToRecord(row);
 	}
 
+	list(principal: Principal): PublicationRebaseReviewRecord[] {
+		return (this.#db.prepare('SELECT * FROM publication_rebase_reviews WHERE owner_id = ? ORDER BY created_at DESC').all(principal.id) as ReviewRow[]).map(rowToRecord);
+	}
+
 	async execute(id: string, principal: Principal): Promise<PublicationRebaseReviewRecord> {
 		const record = this.get(id, principal);
 		if (record.status === 'approved' || record.status === 'blocked' || record.status === 'failed') return record;
@@ -327,3 +331,5 @@ export class PublicationRebaseReviewService {
 		ensurePublicationRebaseSchema(this.#db); ensurePublicationRebaseReviewSchema(this.#db);
 	}
 }
+
+export const publicationRebaseReviews = new PublicationRebaseReviewService();
