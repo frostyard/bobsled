@@ -30,6 +30,7 @@ import { ensureIntegrationConflictAgentInvocationSchema } from './integration-co
 import { ensureMultiWorkerBudgetSchema } from './multi-worker-budget-store.ts';
 import { ensurePublicationRebaseSchema } from './publication-rebase-schema.ts';
 import { ensurePublicationRebaseReviewSchema } from './publication-rebase-review-schema.ts';
+import { ensureMultiRepositoryChangeSetSchema } from './multi-repository-change-set-schema.ts';
 import { dataPath } from '../paths.ts';
 
 export interface Principal {
@@ -102,8 +103,13 @@ function optionalJson(value: string | null): unknown | undefined {
 export class JobLedger {
 	readonly #db: Database.Database;
 	readonly #now: () => Date;
+	readonly #repositoryResolver: (id: string) => RepositoryContract | undefined;
 
-	constructor(path = dataPath('bobsled.db'), now: () => Date = () => new Date()) {
+	constructor(
+		path = dataPath('bobsled.db'),
+		now: () => Date = () => new Date(),
+		repositoryResolver: (id: string) => RepositoryContract | undefined = getRepository,
+	) {
 		if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 		this.#db = new Database(path);
 		if (path !== ':memory:') chmodSync(path, 0o600);
@@ -111,6 +117,7 @@ export class JobLedger {
 		this.#db.pragma('busy_timeout = 5000');
 		this.#db.pragma('journal_mode = WAL');
 		this.#now = now;
+		this.#repositoryResolver = repositoryResolver;
 		this.#migrate();
 	}
 
@@ -170,12 +177,13 @@ export class JobLedger {
 		ensureMultiWorkerBudgetSchema(this.#db);
 		ensurePublicationRebaseSchema(this.#db);
 		ensurePublicationRebaseReviewSchema(this.#db);
+		ensureMultiRepositoryChangeSetSchema(this.#db);
 	}
 
 	admit(input: unknown, principal: Principal, idempotencyKey: string): RunRecord {
 		const request = v.parse(AdmitRunRequestSchema, input);
 		if (!idempotencyKey || idempotencyKey.length > 200) throw new Error('A bounded Idempotency-Key is required');
-		const repository = getRepository(request.repositoryId);
+		const repository = this.#repositoryResolver(request.repositoryId);
 		if (!repository) throw new LedgerNotFoundError(`Repository is not enrolled: ${request.repositoryId}`);
 		const requestHash = hash(request);
 
@@ -189,6 +197,7 @@ export class JobLedger {
 			if (request.supersedesRunId) {
 				const prior = this.#ownedRun(request.supersedesRunId, principal);
 				if (!['blocked', 'cancelled', 'failed'].includes(prior.status)) throw new LedgerConflictError('Only blocked, cancelled, or failed runs may be superseded');
+				this.#assertNotMultiRepositoryMember(request.supersedesRunId, 'supersede');
 			}
 
 			const runId = randomUUID();
@@ -441,6 +450,7 @@ export class JobLedger {
 			const timestamp = this.#now().toISOString();
 			const job = this.#db.prepare("SELECT id FROM jobs WHERE run_id = ? AND status = 'blocked'").get(runId) as { id: string } | undefined;
 			if (!job) throw new LedgerConflictError('Blocked run has no blocked job');
+			this.#assertNotMultiRepositoryMember(runId, 'override');
 			this.#db.prepare("UPDATE runs SET status = 'pending', version = version + 1, updated_at = ? WHERE id = ?").run(timestamp, runId);
 			this.#db.prepare("UPDATE jobs SET status = 'admitted', version = version + 1, updated_at = ? WHERE id = ?").run(timestamp, job.id);
 			this.#db.prepare('INSERT INTO approvals (id, run_id, job_id, kind, actor_id, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -457,6 +467,7 @@ export class JobLedger {
 			if (run.version !== request.expectedVersion) throw new LedgerConflictError('Run changed; reload before cancelling');
 			if (run.status === 'cancelled') return this.get(runId, principal);
 			if (['succeeded', 'failed'].includes(run.status)) throw new LedgerConflictError('Completed runs are immutable; supersede them with a new run');
+			this.#assertNotMultiRepositoryMember(runId, 'cancel');
 			const timestamp = this.#now().toISOString();
 			this.#db.prepare("UPDATE runs SET status = 'cancelled', version = version + 1, updated_at = ? WHERE id = ?").run(timestamp, runId);
 			this.#db.prepare("UPDATE jobs SET status = 'cancelled', version = version + 1, updated_at = ? WHERE run_id = ? AND status NOT IN ('succeeded','failed','cancelled')").run(timestamp, runId);
@@ -470,6 +481,12 @@ export class JobLedger {
 		if (!row) throw new LedgerNotFoundError('Run not found');
 		if (row.owner_id !== principal.id) throw new LedgerForbiddenError('Run belongs to another principal');
 		return row;
+	}
+
+	#assertNotMultiRepositoryMember(runId: string, action: string): void {
+		if (this.#db.prepare('SELECT change_set_id FROM multi_repository_change_set_members WHERE run_id = ?').get(runId)) {
+			throw new LedgerConflictError(`Multi-repository member runs require an explicit coordinated ${action} action`);
+		}
 	}
 
 	#audit(runId: string, jobId: string | undefined, actorId: string, type: string, payload: Record<string, unknown>, createdAt: string): void {
