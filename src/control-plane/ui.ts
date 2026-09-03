@@ -341,6 +341,7 @@ async function publicationRecoveryAction(card, action) {
     replay_publication: 'Operator authorizes a zero-model replay of the exact approved patch against the current default branch and current quality gates.',
     review_publication_replay: 'Operator authorizes one fresh read-only adversarial review of the validated replay; the model call cannot be retried after dispatch.',
     promote_publication_replay: 'Operator creates a new immutable draft publication attempt from the freshly approved replay.',
+    resolve_publication_supersession: 'Operator records that the later merged pull request delivered this task; the stale publication and failed replay remain immutable.',
   };
   const reason = window.prompt('Recovery authorization (recorded durably):', defaults[action]);
   if (!reason) return;
@@ -350,11 +351,14 @@ async function publicationRecoveryAction(card, action) {
   if (action === 'review_publication_replay' && recovery && recovery.rebase) url = recovery.review && recovery.review.status === 'pending'
     ? '/api/publication-recoveries/reviews/' + recovery.review.id + '/execute' : '/api/publication-recoveries/replays/' + recovery.rebase.id + '/reviews';
   if (action === 'promote_publication_replay' && recovery && recovery.review) url = '/api/publication-recoveries/reviews/' + recovery.review.id + '/promote';
+  if (action === 'resolve_publication_supersession' && recovery && recovery.supersedingCandidate) url = '/api/publication-recoveries/resolutions';
   if (!url) return showError(new Error('Publication recovery evidence is incomplete. Refresh the board before retrying.'));
   result.textContent = action === 'review_publication_replay' ? 'Running one fresh adversarial review…' : 'Applying the trusted publication recovery transition…';
   try {
     const resuming = url.endsWith('/execute');
-    const body = action === 'replay_publication' && !resuming ? { sourcePublicationId: card.publication.id, reason } : { reason };
+    const body = action === 'resolve_publication_supersession'
+      ? { sourcePublicationId: card.publication.id, supersedingPublicationId: recovery.supersedingCandidate.publicationId, reason }
+      : action === 'replay_publication' && !resuming ? { sourcePublicationId: card.publication.id, reason } : { reason };
     const completed = await json(url, { method:'POST', headers:{'content-type':'application/json','idempotency-key':browserUuid()}, body:JSON.stringify(body) });
     result.textContent = JSON.stringify(completed, null, 2); await loadRuns();
   } catch (error) { showError(error); }
@@ -477,7 +481,7 @@ function actionButton(card, action) {
     if (action.kind === 'prepare_publication') return preparePublication(run);
     if (action.kind === 'publish_publication' && publication) return publicationAction(publication, 'execute');
     if (action.kind === 'refresh_checks' && publication) return publicationAction(publication, 'refresh-checks');
-    if (['replay_publication','review_publication_replay','promote_publication_replay'].includes(action.kind)) return publicationRecoveryAction(card, action.kind);
+    if (['replay_publication','review_publication_replay','promote_publication_replay','resolve_publication_supersession'].includes(action.kind)) return publicationRecoveryAction(card, action.kind);
     if (action.kind === 'open_pull_request' && action.url) window.open(action.url, '_blank', 'noopener,noreferrer');
   });
   return button;
@@ -576,6 +580,12 @@ function openDrawer(card) {
       'Model calls: ' + replayReview.modelCalls,
       ...(replayReview.report ? ['Verdict: ' + replayReview.report.verdict, replayReview.report.summary] : []),
       ...(replayReview.blockReason ? ['Block reason: ' + replayReview.blockReason] : []),
+    ]);
+    if (card.publicationRecovery.resolution) appendList(recovery, 'Terminal resolution', [
+      'Disposition: superseded by a later merged publication',
+      'Model calls: 0',
+      'GitHub mutations: 0',
+      'Reason: ' + card.publicationRecovery.resolution.reason,
     ]);
   }
   const timeline = drawerSection('Audit timeline'); timeline.classList.add('timeline');

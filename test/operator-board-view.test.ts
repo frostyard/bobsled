@@ -114,6 +114,20 @@ test('stale-base recovery advances through explicit replay, review, and promotio
 		assert.equal(pendingReview.phase, 'fresh review pending'); assert.equal(pendingReview.actions[0]?.label, 'Resume fresh review');
 		const approved = projectRunForBoard(run, publication, undefined, { sourcePublicationId: publication.id, rebase, review });
 		assert.equal(approved.lane, 'delivery'); assert.deepEqual(approved.actions.map(({ kind }) => kind), ['promote_publication_replay']);
+
+		const resolved = projectRunForBoard(run, publication, undefined, {
+			sourcePublicationId: publication.id, rebase,
+			resolution: {
+				id: '66666666-6666-4666-8666-666666666666', ownerId: principal.id, sourcePublicationId: publication.id,
+				supersedingPublicationId: '77777777-7777-4777-8777-777777777777', repositoryId: publication.repositoryId,
+				disposition: 'superseded_by_merged_publication', modelCalls: 0, githubMutations: 0,
+				reason: 'The later merged publication delivered this task.', createdAt: '2026-09-03T10:06:00.000Z',
+			},
+			supersedingCandidate: { publicationId: '77777777-7777-4777-8777-777777777777', pullNumber: 7, pullUrl: 'https://github.com/frostyard/frostyard-org/pull/7' },
+		});
+		assert.equal(resolved.lane, 'history'); assert.equal(resolved.phase, 'superseded by merged publication');
+		assert.equal(resolved.updatedAt, '2026-09-03T10:06:00.000Z');
+		assert.deepEqual(resolved.actions.map(({ kind }) => kind), ['open_pull_request']);
 	} finally { ledger.close(); }
 });
 
