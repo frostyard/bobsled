@@ -9,11 +9,12 @@ async function accessSurface(surface) {
     body,
   ]));
 
-  const [authority, status, observability, repositoryDrift] = await Promise.all([
+  const [authority, status, observability, repositoryDrift, enrollments] = await Promise.all([
     json('/api/github-app/authority').catch((error) => ({ error: message(error) })),
     json('/api/github-app/status').catch(() => undefined),
     json('/api/observability/status').catch(() => undefined),
     json('/api/repositories/drift').catch(() => undefined),
+    json('/api/repository-enrollments').catch(() => []),
   ]);
 
   if (authority.error) {
@@ -56,16 +57,49 @@ async function accessSurface(surface) {
 
   body.append(el('div', { class: 'subhead', text: 'Repositories' }));
   const grid = el('div', { style: 'display:grid;gap:8px' });
-  for (const repository of state.repositories) {
+  const managedRepositories = enrollments.length ? enrollments : state.repositories.map((repository) => ({ repository: repository, version: 1 }));
+  for (const enrollment of managedRepositories) {
+    const repository = enrollment.repository;
     const drift = repositoryDrift && repositoryDrift.find((entry) => entry.repositoryId === repository.id);
     const driftLabel = !drift ? 'not checked' : drift.status === 'aligned' ? 'aligned' : drift.status === 'drifted' ? 'drift found' : 'unavailable';
     const detail = !drift || !drift.findings.length ? '' : ' · ' + drift.findings.map((finding) => finding.kind.replace(/_/g, ' ')).join(', ');
+    const controls = [];
+    if (repository.enabled !== false) controls.push(el('button', { class: 'btn', text: 'Disable', onclick: async () => {
+      const decision = await authorize('disable_repository', { subject: repository.id });
+      if (!decision.ok) return;
+      await post('/api/repository-enrollments/' + repository.id + '/disable', { expectedVersion: enrollment.version, reason: decision.reason });
+      toast('Repository disabled.'); render();
+    }}));
+    else controls.push(el('button', { class: 'btn primary', text: 'Enable', onclick: async () => {
+      const decision = await authorize('enable_repository', { subject: repository.id });
+      if (!decision.ok) return;
+      await post('/api/repository-enrollments', { repositoryId: repository.id, expectedVersion: enrollment.version, reason: decision.reason });
+      toast('Repository enabled with its current GitHub policy.'); render();
+    }}));
     grid.append(el('div', { class: 'filerow' }, [
       el('span', { text: repository.id }),
-      el('span', { class: 'pm', text: (repository.readOnly ? 'read only' : 'can write') + ' · ' + driftLabel + detail }),
+      el('span', { class: 'pm', text: (repository.enabled !== false ? (repository.readOnly ? 'read only' : 'can write') : 'disabled') + ' · v' + enrollment.version + ' · ' + driftLabel + detail }),
+      ...controls,
     ]));
   }
   body.append(grid);
+  const discovery = el('div', { style: 'display:grid;gap:8px' });
+  body.append(el('div', { class: 'btnrow' }, [el('button', { class: 'btn', text: 'Find installed repositories', onclick: async () => {
+    clear(discovery).append(el('span', { class: 'pm', text: 'Checking GitHub…' }));
+    try {
+      const candidates = await json('/api/repository-enrollments/discover'); clear(discovery);
+      for (const candidate of candidates.filter((entry) => !entry.enrolled)) discovery.append(el('div', { class: 'filerow' }, [
+        el('span', { text: candidate.id }),
+        el('button', { class: 'btn primary', text: 'Enroll', onclick: async () => {
+          const decision = await authorize('enroll_repository', { subject: candidate.id }); if (!decision.ok) return;
+          await post('/api/repository-enrollments', { repositoryId: candidate.id, expectedVersion: 0, reason: decision.reason });
+          toast('Repository enrolled.'); render();
+        }}),
+      ]));
+      if (!discovery.children.length) discovery.append(el('span', { class: 'pm', text: 'Every installed repository is already enrolled.' }));
+    } catch (error) { fail(error, discovery); }
+  }} )]));
+  body.append(discovery);
   return undefined;
 }
 

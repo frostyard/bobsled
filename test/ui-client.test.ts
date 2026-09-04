@@ -262,7 +262,8 @@ test('the Access surface shows repository alignment and bounded drift findings',
 	}, '/access');
 
 	assert.match(harness.document.textContent, /frostyard\/clix/);
-	assert.match(harness.document.textContent, /read only · drift found · default branch/);
+	assert.match(harness.document.textContent, /read only · v1 · drift found · default branch/);
+	assert.match(harness.document.textContent, /Find installed repositories/);
 	assert.equal(harness.calls.some(({ url }) => url === '/api/repositories/drift'), true);
 });
 

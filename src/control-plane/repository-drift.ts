@@ -73,7 +73,7 @@ export class RepositoryDriftService {
 	async inspectAll(): Promise<RepositoryDriftRecord[]> {
 		const records: RepositoryDriftRecord[] = [];
 		// Keep installation-token minting and GitHub reads bounded and sequential.
-		for (const repository of this.#repositories) records.push(await this.#inspect(repository));
+		for (const repository of this.#repositories.filter(({ enabled }) => enabled)) records.push(await this.#inspect(repository));
 		return records;
 	}
 

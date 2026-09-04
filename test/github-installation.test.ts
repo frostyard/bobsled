@@ -90,6 +90,21 @@ test('rejects unenrolled repositories and missing authority before minting', asy
 	await assert.rejects(unconfigured.withRequest('frostyard/clix', 'issue_metadata_read', async () => undefined), GitHubInstallationConfigurationError);
 });
 
+test('bounds discovery to installation metadata and candidate contents authority', async () => {
+	const requests: Record<string, unknown>[] = [];
+	const authority = new GitHubInstallationAuthority(environment, (() => async (options: Record<string, unknown>) => {
+		requests.push(options);
+		return { type: 'token', tokenType: 'installation', token: 'short-lived-token', installationId: 456, createdAt: '2026-09-01T12:00:00Z', expiresAt: '2026-09-01T13:00:00Z', permissions: {}, repositorySelection: 'all' };
+	}) as never, async () => Response.json({}));
+	await authority.withInstallationRequest('repository_metadata_read', (scoped) => scoped.request('/installation/repositories'));
+	await authority.withCandidateRequest('frostyard/satellite', 24680, 'repository_contents_read', (scoped) => scoped.request('/repos/frostyard/satellite/contents/.bobsled/repository.json'));
+	assert.deepEqual(requests, [
+		{ type: 'installation', installationId: 456, permissions: { metadata: 'read' } },
+		{ type: 'installation', installationId: 456, repositoryIds: [24680], permissions: { contents: 'read' } },
+	]);
+	await assert.rejects(authority.withCandidateRequest('other/satellite', 24680, 'repository_contents_read', async () => undefined), GitHubInstallationScopeError);
+});
+
 test('loads installation key material from the configured protected file', async () => {
 	let strategy: Record<string, unknown> | undefined;
 	let reads = 0;

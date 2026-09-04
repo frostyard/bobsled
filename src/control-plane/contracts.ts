@@ -117,6 +117,22 @@ export const RepositoryContractSchema = v.object({
 	}),
 });
 
+/** Repository-owned policy; identity and lifecycle metadata come from GitHub. */
+export const RepositoryPolicyDeclarationSchema = v.object({
+	version: v.literal(1),
+	readOnly: RepositoryContractSchema.entries.readOnly,
+	agentSurfaces: RepositoryContractSchema.entries.agentSurfaces,
+	qualityGates: RepositoryContractSchema.entries.qualityGates,
+	protectedBoundaries: RepositoryContractSchema.entries.protectedBoundaries,
+	capabilities: RepositoryContractSchema.entries.capabilities,
+	multiRepo: RepositoryContractSchema.entries.multiRepo,
+	executionPolicy: RepositoryContractSchema.entries.executionPolicy,
+	multiWorkerPolicy: RepositoryContractSchema.entries.multiWorkerPolicy,
+	reviewPolicy: RepositoryContractSchema.entries.reviewPolicy,
+	publicationPolicy: RepositoryContractSchema.entries.publicationPolicy,
+	workspacePreparation: RepositoryContractSchema.entries.workspacePreparation,
+});
+
 /** Historical snapshots remain readable when later milestones add execution-only policy fields. */
 export const RepositoryPolicySnapshotSchema = v.object({
 	...RepositoryContractSchema.entries,
@@ -205,6 +221,7 @@ export const TriageApiRequestSchema = v.object({
 });
 
 export type RepositoryContract = v.InferOutput<typeof RepositoryContractSchema>;
+export type RepositoryPolicyDeclaration = v.InferOutput<typeof RepositoryPolicyDeclarationSchema>;
 export type RepositoryPolicySnapshot = v.InferOutput<typeof RepositoryPolicySnapshotSchema>;
 export type CompatibilityGate = v.InferOutput<typeof CompatibilityGateSchema>;
 export type WorkerNetworkPolicy = v.InferOutput<typeof WorkerNetworkPolicySchema>;
