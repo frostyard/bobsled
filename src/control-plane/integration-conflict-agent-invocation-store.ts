@@ -18,6 +18,7 @@ import {
 	type IntegrationConflictAgentOutcome,
 } from './integration-conflict-agent-contracts.ts';
 import { ensureMultiWorkerParentSchema } from './multi-worker-parent-store.ts';
+import { claimOrganizationCapacity, ensureOrganizationCapacityClaimSchema, releaseOrganizationCapacity } from './organization-capacity-claim-store.ts';
 import { MultiWorkerPlanV2Schema, WorkPlanTaskIdSchema, type MultiWorkerPlanV2 } from './work-plan-contracts.ts';
 
 const ReservationSchema = v.object({
@@ -104,6 +105,7 @@ function hash(value: unknown): string {
 
 export function ensureIntegrationConflictAgentInvocationSchema(db: Database.Database): void {
 	ensureMultiWorkerParentSchema(db);
+	ensureOrganizationCapacityClaimSchema(db);
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS integration_conflict_agent_invocations (
 			id TEXT PRIMARY KEY, source_resolution_id TEXT NOT NULL, source_assembly_id TEXT NOT NULL,
@@ -197,6 +199,8 @@ export class IntegrationConflictAgentInvocationStore {
 			}
 			const timestamp = this.#now().toISOString();
 			try {
+				const context = this.getContext(agentAttemptId, ownerId);
+				claimOrganizationCapacity(this.#db, { sourceKind: 'integration_conflict_agent', sourceId: agentAttemptId, ownerId, repositoryId: context.repository.id, slots: { openaiCodex: 1, githubCopilot: 0 } }, this.#now());
 				const changed = this.#db.prepare(`UPDATE integration_conflict_agent_invocations
 					SET status = 'running', model_calls = 1, started_at = ?
 					WHERE id = ? AND owner_id = ? AND status = 'reserved' AND model_calls = 0`)
@@ -288,6 +292,7 @@ export class IntegrationConflictAgentInvocationStore {
 				WHERE id = ? AND owner_id = ? AND status = 'running' AND model_calls = 1`)
 				.run(detail, timestamp, agentAttemptId, ownerId);
 			if (changed.changes !== 1) throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent failure was settled concurrently');
+			releaseOrganizationCapacity(this.#db, 'integration_conflict_agent', agentAttemptId, 'integration_conflict_agent.failed', this.#now());
 			return this.get(agentAttemptId, ownerId);
 		})();
 	}
@@ -339,6 +344,7 @@ export class IntegrationConflictAgentInvocationStore {
 				WHERE id = ? AND owner_id = ? AND status = 'running' AND model_calls = 1`)
 				.run(resolution.status, timestamp, resolution.status === 'blocked' ? resolution.detail : null, agentAttemptId, ownerId);
 			if (changed.changes !== 1) throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent completion was settled concurrently');
+			releaseOrganizationCapacity(this.#db, 'integration_conflict_agent', agentAttemptId, `integration_conflict_agent.${resolution.status}`, this.#now());
 			return this.get(agentAttemptId, ownerId);
 		})();
 	}
@@ -428,6 +434,7 @@ export class IntegrationConflictAgentInvocationStore {
 				WHERE id = ? AND owner_id = ? AND status = ? AND model_calls = ?`)
 				.run(status, boundedDetail, timestamp, agentAttemptId, ownerId, expectedStatus, expectedCalls);
 			if (changed.changes !== 1) throw new IntegrationConflictAgentInvocationConflictError('Conflict-agent invocation was settled concurrently');
+			if (expectedCalls === 1) releaseOrganizationCapacity(this.#db, 'integration_conflict_agent', agentAttemptId, `integration_conflict_agent.${status}`, this.#now());
 			return this.get(agentAttemptId, ownerId);
 		})();
 	}

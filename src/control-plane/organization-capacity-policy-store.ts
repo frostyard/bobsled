@@ -44,6 +44,20 @@ function canonical(value: unknown): unknown {
 
 function digest(value: unknown): string { return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex'); }
 
+function readPolicyRow(row: PolicyRow): OrganizationCapacityPolicyRecord {
+	let policy: OrganizationCapacityPolicy;
+	try { policy = v.parse(OrganizationCapacityPolicySchema, JSON.parse(row.policy_json)); }
+	catch { throw new OrganizationCapacityPolicyIntegrityError('Stored organization capacity policy is malformed'); }
+	const eventSha256 = digest({ id: row.id, version: row.version, policySha256: row.policy_sha256, actorId: row.actor_id, idempotencyKey: row.idempotency_key, requestSha256: row.request_sha256, reason: row.reason, createdAt: row.created_at });
+	if (digest(policy) !== row.policy_sha256 || digest({ policy, expectedVersion: row.version - 1, reason: row.reason }) !== row.request_sha256 || eventSha256 !== row.event_sha256) throw new OrganizationCapacityPolicyIntegrityError('Stored organization capacity policy failed integrity verification');
+	return { policy, version: row.version, policySha256: row.policy_sha256, actorId: row.actor_id, reason: row.reason, createdAt: row.created_at };
+}
+
+export function readCurrentOrganizationCapacityPolicy(db: Database.Database): OrganizationCapacityPolicyRecord | undefined {
+	const row = db.prepare('SELECT * FROM organization_capacity_policy_events ORDER BY version DESC LIMIT 1').get() as PolicyRow | undefined;
+	return row && readPolicyRow(row);
+}
+
 export function ensureOrganizationCapacityPolicySchema(db: Database.Database): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -97,12 +111,7 @@ export class OrganizationCapacityPolicyStore {
 	}
 
 	#read(row: PolicyRow): OrganizationCapacityPolicyRecord {
-		let policy: OrganizationCapacityPolicy;
-		try { policy = v.parse(OrganizationCapacityPolicySchema, JSON.parse(row.policy_json)); }
-		catch { throw new OrganizationCapacityPolicyIntegrityError('Stored organization capacity policy is malformed'); }
-		const eventSha256 = digest({ id: row.id, version: row.version, policySha256: row.policy_sha256, actorId: row.actor_id, idempotencyKey: row.idempotency_key, requestSha256: row.request_sha256, reason: row.reason, createdAt: row.created_at });
-		if (digest(policy) !== row.policy_sha256 || digest({ policy, expectedVersion: row.version - 1, reason: row.reason }) !== row.request_sha256 || eventSha256 !== row.event_sha256) throw new OrganizationCapacityPolicyIntegrityError('Stored organization capacity policy failed integrity verification');
-		return { policy, version: row.version, policySha256: row.policy_sha256, actorId: row.actor_id, reason: row.reason, createdAt: row.created_at };
+		return readPolicyRow(row);
 	}
 }
 

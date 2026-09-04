@@ -30,6 +30,7 @@ import { ensurePublicationRebaseReviewSchema } from './publication-rebase-review
 import { ensurePublicationRebaseSchema } from './publication-rebase-schema.ts';
 import { getRepository } from './repositories.ts';
 import { runReviewWorker, type ReviewWorkerRunner } from './review-worker-service.ts';
+import { claimOrganizationCapacity, ensureOrganizationCapacityClaimSchema, getOrganizationCapacityClaim, releaseOrganizationCapacity } from './organization-capacity-claim-store.ts';
 
 const execFileAsync = promisify(execFile);
 const MAX_GIT_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -194,10 +195,13 @@ export class PublicationRebaseReviewService {
 		} catch (error) {
 			return this.#settle(id, principal, 'blocked', 'rebase_evidence_changed', error instanceof Error ? error.message : 'Replay review preflight failed');
 		}
-		const claimed = this.#db.prepare(`UPDATE publication_rebase_reviews SET status = 'running', model_calls = 1,
-			repository_context_path = ?, lease_expires_at = ?, updated_at = ? WHERE id = ? AND owner_id = ? AND status = 'preparing' AND model_calls = 0`).run(
-			repositoryContextPath, new Date(now.getTime() + this.#reviewTimeoutMs(record.repositoryId) + 60_000).toISOString(), now.toISOString(), id, principal.id,
-		);
+		const claimed = this.#db.transaction(() => {
+			claimOrganizationCapacity(this.#db, { sourceKind: 'publication_rebase_review', sourceId: id, ownerId: principal.id, repositoryId: record.repositoryId, slots: { openaiCodex: 0, githubCopilot: 1 } }, this.#now());
+			return this.#db.prepare(`UPDATE publication_rebase_reviews SET status = 'running', model_calls = 1,
+				repository_context_path = ?, lease_expires_at = ?, updated_at = ? WHERE id = ? AND owner_id = ? AND status = 'preparing' AND model_calls = 0`).run(
+				repositoryContextPath, new Date(now.getTime() + this.#reviewTimeoutMs(record.repositoryId) + 60_000).toISOString(), now.toISOString(), id, principal.id,
+			);
+		}).immediate();
 		if (claimed.changes !== 1) throw new PublicationRebaseReviewConflictError('Fresh replay review could not claim its sole model call');
 
 		let outcome: ReviewOutcome;
@@ -309,13 +313,16 @@ export class PublicationRebaseReviewService {
 	#reviewTimeoutMs(repositoryId: string): number { return (this.#repository(repositoryId)?.reviewPolicy.reviewerTimeoutMinutes ?? 15) * 60_000; }
 
 	#settle(id: string, principal: Principal, status: 'approved' | 'blocked' | 'failed', blockReason?: PublicationRebaseReviewBlockReason, detail?: string, outcome?: ReviewOutcome): PublicationRebaseReviewRecord {
-		const changed = this.#db.prepare(`UPDATE publication_rebase_reviews SET status = ?, report_json = COALESCE(?, report_json),
-			conversation_id = COALESCE(?, conversation_id), submission_id = COALESCE(?, submission_id), block_reason = ?, detail = ?,
-			lease_expires_at = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND status IN ('pending','preparing','running')`).run(
-			status, outcome ? json(outcome.report) : null, outcome?.conversationId ?? null, outcome?.submissionId ?? null,
-			blockReason ?? null, detail?.slice(0, 10_000) ?? null, this.#now().toISOString(), id, principal.id,
-		);
-		if (changed.changes !== 1) throw new PublicationRebaseReviewConflictError('Fresh replay review was settled concurrently');
+		this.#db.transaction(() => {
+			const changed = this.#db.prepare(`UPDATE publication_rebase_reviews SET status = ?, report_json = COALESCE(?, report_json),
+				conversation_id = COALESCE(?, conversation_id), submission_id = COALESCE(?, submission_id), block_reason = ?, detail = ?,
+				lease_expires_at = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND status IN ('pending','preparing','running')`).run(
+				status, outcome ? json(outcome.report) : null, outcome?.conversationId ?? null, outcome?.submissionId ?? null,
+				blockReason ?? null, detail?.slice(0, 10_000) ?? null, this.#now().toISOString(), id, principal.id,
+			);
+			if (changed.changes !== 1) throw new PublicationRebaseReviewConflictError('Fresh replay review was settled concurrently');
+			if (getOrganizationCapacityClaim(this.#db,'publication_rebase_review',id)?.status === 'active') releaseOrganizationCapacity(this.#db,'publication_rebase_review',id,`publication_rebase_review.${status}`,this.#now());
+		}).immediate();
 		return this.get(id, principal);
 	}
 
@@ -328,7 +335,7 @@ export class PublicationRebaseReviewService {
 
 	#migrate(): void {
 		this.#db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
-		ensurePublicationRebaseSchema(this.#db); ensurePublicationRebaseReviewSchema(this.#db);
+		ensurePublicationRebaseSchema(this.#db); ensurePublicationRebaseReviewSchema(this.#db); ensureOrganizationCapacityClaimSchema(this.#db);
 	}
 }
 

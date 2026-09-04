@@ -371,7 +371,7 @@ app.get('/api/repositories/:owner/:repository/issues', async (context) => {
 
 app.post('/api/triage', async (context) => {
 	try {
-		return context.json(await triageWorkItem(await context.req.json()));
+		return context.json(await triageWorkItem(await context.req.json(), context.get('principal').id));
 	} catch (error) {
 		return context.json({ error: error instanceof Error ? error.message : 'Triage failed' }, 400);
 	}

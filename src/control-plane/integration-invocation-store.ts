@@ -38,6 +38,7 @@ import {
 	IntegrationFinalIntegrityResultSchema,
 	type IntegrationFinalIntegrityResult,
 } from './integration-final-integrity.ts';
+import { claimOrganizationCapacity, ensureOrganizationCapacityClaimSchema, releaseOrganizationCapacity } from './organization-capacity-claim-store.ts';
 
 const ReservationSchema = v.object({
 	integrationAttemptId: v.pipe(v.string(), v.uuid()),
@@ -115,6 +116,7 @@ function samePaths(left: readonly string[], right: readonly string[]): boolean {
 
 export function ensureIntegrationInvocationSchema(db: Database.Database): void {
 	ensureMultiWorkerParentSchema(db);
+	ensureOrganizationCapacityClaimSchema(db);
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS integration_invocations (
 			id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, assembly_id TEXT NOT NULL UNIQUE,
@@ -284,6 +286,10 @@ export class IntegrationInvocationStore {
 			const timestamp = this.#now().toISOString();
 			this.#db.prepare('INSERT INTO integration_preflights (invocation_id, result_json, created_at) VALUES (?, ?, ?)')
 				.run(integrationAttemptId, JSON.stringify(result), timestamp);
+			if (result.status === 'passed') {
+				const parent = this.getParentContext(integrationAttemptId, ownerId);
+				claimOrganizationCapacity(this.#db, { sourceKind: 'integration_invocation', sourceId: integrationAttemptId, ownerId, repositoryId: parent.repository.id, slots: { openaiCodex: 1, githubCopilot: 0 } }, this.#now());
+			}
 			const changed = result.status === 'passed'
 				? this.#db.prepare(`UPDATE integration_invocations SET status = 'running', worker_calls = 1, started_at = ?
 					WHERE id = ? AND owner_id = ? AND status = 'reserved' AND worker_calls = 0`)
@@ -320,6 +326,7 @@ export class IntegrationInvocationStore {
 				WHERE id = ? AND owner_id = ? AND status = 'running' AND worker_calls = 1 AND outcome_json IS NULL`)
 				.run(status, JSON.stringify(parsedOutcome), status === 'blocked' ? timestamp : null, integrationAttemptId, ownerId);
 			if (changed.changes !== 1) throw new IntegrationInvocationConflictError('Integration invocation was settled concurrently');
+			releaseOrganizationCapacity(this.#db, 'integration_invocation', integrationAttemptId, `integration_worker.${status}`, this.#now());
 			return this.get(integrationAttemptId, ownerId);
 		})();
 	}
@@ -377,6 +384,7 @@ export class IntegrationInvocationStore {
 				WHERE id = ? AND owner_id = ? AND status = 'running' AND worker_calls = 1 AND outcome_json IS NULL`)
 				.run(timestamp, integrationAttemptId, ownerId);
 			if (changed.changes !== 1) throw new IntegrationInvocationConflictError('Integration invocation was settled concurrently');
+			releaseOrganizationCapacity(this.#db, 'integration_invocation', integrationAttemptId, 'integration_worker.failed', this.#now());
 			return this.get(integrationAttemptId, ownerId);
 		})();
 	}

@@ -34,6 +34,7 @@ import { ensurePublicationRebaseSchema } from './publication-rebase-schema.ts';
 import { ensurePublicationRebaseReviewSchema } from './publication-rebase-review-schema.ts';
 import { ensureMultiRepositoryChangeSetSchema } from './multi-repository-change-set-schema.ts';
 import { ensureIntakeConversationSchema } from './intake-conversation-schema.ts';
+import { claimOrganizationCapacity, ensureOrganizationCapacityClaimSchema, getOrganizationCapacityClaim, releaseOrganizationCapacity } from './organization-capacity-claim-store.ts';
 import { dataPath } from '../paths.ts';
 
 export interface Principal {
@@ -182,6 +183,7 @@ export class JobLedger {
 		ensurePublicationRebaseReviewSchema(this.#db);
 		ensureMultiRepositoryChangeSetSchema(this.#db);
 		ensureIntakeConversationSchema(this.#db);
+		ensureOrganizationCapacityClaimSchema(this.#db);
 	}
 
 	admit(input: unknown, principal: Principal, idempotencyKey: string): RunRecord {
@@ -351,6 +353,7 @@ export class JobLedger {
 		this.#db.transaction(() => {
 			this.#ownedRun(execution.runId, principal);
 			const timestamp = this.#now().toISOString();
+			claimOrganizationCapacity(this.#db, { sourceKind: 'execution_attempt', sourceId: execution.attemptId, ownerId: principal.id, repositoryId: execution.repository.id, slots: { openaiCodex: 1, githubCopilot: 0 } }, this.#now());
 			const changed = this.#db.prepare("UPDATE attempts SET status = 'running', started_at = ? WHERE id = ? AND job_id = ? AND status = 'queued'")
 				.run(timestamp, execution.attemptId, execution.jobId).changes;
 			if (changed !== 1) throw new LedgerConflictError('Execution attempt is not queued');
@@ -373,6 +376,7 @@ export class JobLedger {
 			const changed = this.#db.prepare("UPDATE attempts SET status = ?, finished_at = ?, outcome_json = ? WHERE id = ? AND job_id = ? AND status IN ('queued','running')")
 				.run(status, timestamp, json(outcome), execution.attemptId, execution.jobId).changes;
 			if (changed !== 1) throw new LedgerConflictError('Execution attempt is already settled');
+			if (getOrganizationCapacityClaim(this.#db, 'execution_attempt', execution.attemptId)?.status === 'active') releaseOrganizationCapacity(this.#db, 'execution_attempt', execution.attemptId, `execution.${status}`, this.#now());
 			for (const artifact of artifacts) {
 				this.#db.prepare('INSERT INTO artifacts (id, job_id, attempt_id, kind, uri, digest, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
 					.run(randomUUID(), execution.jobId, execution.attemptId, artifact.kind, artifact.uri, artifact.digest ?? null, json(artifact.metadata), timestamp);
@@ -432,6 +436,7 @@ export class JobLedger {
 		this.#db.transaction(() => {
 			this.#ownedRun(review.runId, principal);
 			const timestamp = this.#now().toISOString();
+			claimOrganizationCapacity(this.#db, { sourceKind: 'review', sourceId: review.reviewId, ownerId: principal.id, repositoryId: review.repository.id, slots: { openaiCodex: 1, githubCopilot: 1 } }, this.#now());
 			const changed = this.#db.prepare("UPDATE reviews SET status = 'running', started_at = ? WHERE id = ? AND job_id = ? AND status = 'queued'")
 				.run(timestamp, review.reviewId, review.jobId).changes;
 			if (changed !== 1) throw new LedgerConflictError('Adversarial review is not queued');
@@ -454,6 +459,7 @@ export class JobLedger {
 			const changed = this.#db.prepare("UPDATE reviews SET status = ?, initial_verdict_json = ?, final_verdict_json = ?, outcome_json = ?, finished_at = ? WHERE id = ? AND job_id = ? AND status IN ('queued','running')")
 				.run(status, initialVerdict ? json(initialVerdict) : null, finalVerdict ? json(finalVerdict) : null, json(outcome), timestamp, review.reviewId, review.jobId).changes;
 			if (changed !== 1) throw new LedgerConflictError('Adversarial review is already settled');
+			if (getOrganizationCapacityClaim(this.#db, 'review', review.reviewId)?.status === 'active') releaseOrganizationCapacity(this.#db, 'review', review.reviewId, `review.${status}`, this.#now());
 			for (const artifact of artifacts) {
 				this.#db.prepare('INSERT INTO artifacts (id, job_id, attempt_id, kind, uri, digest, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
 					.run(randomUUID(), review.jobId, review.attemptId, artifact.kind, artifact.uri, artifact.digest ?? null, json({ ...artifact.metadata, reviewId: review.reviewId }), timestamp);
