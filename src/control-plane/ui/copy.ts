@@ -70,10 +70,23 @@ export const AUTHORITY: Record<string, AuthorityCopy> = {
 	},
 	configure_capacity_policy: {
 		title: 'Save these fleet limits?', confirm: 'Save limits',
-		grants: ['Record a versioned organization capacity policy', 'Make these limits available to the future shared claim gate'],
-		denies: ['Start, stop, or schedule work', 'Activate enforcement before every provider path adopts the shared claim gate', 'Spend a model call or touch GitHub'],
+		grants: ['Record a versioned organization capacity policy', 'Make these limits available to the shared claim gate'],
+		denies: ['Start, stop, or schedule work', 'Activate or silently rebind enforcement', 'Spend a model call or touch GitHub'],
 		placeholder: 'Why these organization limits are appropriate.',
-		note: 'This release records and displays the policy in observe-only mode. Enforcement remains disabled until every provider path is covered.',
+		note: 'Changing a policy never activates it. Existing enforcement fails closed until the new policy is explicitly reviewed and rebound.',
+	},
+	enable_capacity_enforcement: {
+		title: 'Enforce these exact fleet limits?', confirm: 'Enable enforcement',
+		grants: ['Bind enforcement to the displayed policy version', 'Reject new provider claims atomically when a configured ceiling is full'],
+		denies: ['Cancel or retry existing work', 'Recover expired claims', 'Schedule work, spend a model call, or touch GitHub by itself'],
+		placeholder: 'Why these exact limits are ready for enforcement.',
+		note: 'A later policy revision makes enforcement fail closed until an operator explicitly reviews and rebinds it.',
+	},
+	disable_capacity_enforcement: {
+		title: 'Return fleet limits to observe-only mode?', confirm: 'Disable enforcement',
+		grants: ['Stop rejecting future claims under the current enforcement version', 'Keep policy, claim, and enforcement history'],
+		denies: ['Cancel active calls', 'Delete capacity evidence', 'Start, retry, or schedule work'],
+		placeholder: 'Why enforcement should return to observe-only mode.',
 	},
 	enroll_repository: {
 		title: 'Enroll this repository?', confirm: 'Enroll repository',

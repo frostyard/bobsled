@@ -30,6 +30,7 @@ import { repositoryDriftService } from './control-plane/repository-drift.ts';
 import { repositoryDriftObservationStore, RepositoryDriftObservationConflictError, RepositoryDriftObservationIntegrityError } from './control-plane/repository-drift-observation-store.ts';
 import { repositoryEnrollmentService, RepositoryEnrollmentPolicyError, RepositoryEnrollmentUpstreamError } from './control-plane/repository-enrollment-service.ts';
 import { fleetOperationsProjector } from './control-plane/fleet-operations-view.ts';
+import { organizationCapacityEnforcementStore, OrganizationCapacityEnforcementConflictError, OrganizationCapacityEnforcementIntegrityError } from './control-plane/organization-capacity-enforcement-store.ts';
 import { organizationCapacityPolicyStore, OrganizationCapacityPolicyConflictError, OrganizationCapacityPolicyIntegrityError } from './control-plane/organization-capacity-policy-store.ts';
 import { organizationCapacityClaims, OrganizationCapacityClaimConflictError, OrganizationCapacityClaimIntegrityError } from './control-plane/organization-capacity-claim-store.ts';
 import { RepositoryEnrollmentConflictError, RepositoryEnrollmentIntegrityError } from './control-plane/repository-enrollment-store.ts';
@@ -275,10 +276,10 @@ app.get('/api/github-app/authority', (context) => context.json(auditGitHubPermis
 app.get('/api/operator-auth/status', (context) => context.json(operatorAuthStatus()));
 app.get('/api/observability/status', (context) => context.json(flueObservationStore.metrics()));
 app.get('/api/operations/fleet', (context) => {
-	try { return context.json(fleetOperationsProjector.project(repositoryEnrollmentService.list().map(({ repository }) => repository), organizationCapacityPolicyStore.current())); }
+	try { return context.json(fleetOperationsProjector.project(repositoryEnrollmentService.list().map(({ repository }) => repository), organizationCapacityPolicyStore.current(), organizationCapacityEnforcementStore.current())); }
 	catch (error) {
 		const message = error instanceof Error ? error.message : 'Organization capacity policy could not be read';
-		return context.json({ error: message }, error instanceof OrganizationCapacityPolicyIntegrityError ? 500 : 400);
+		return context.json({ error: message }, error instanceof OrganizationCapacityPolicyIntegrityError||error instanceof OrganizationCapacityEnforcementIntegrityError ? 500 : 400);
 	}
 });
 app.post('/api/operations/capacity-policy', async (context) => {
@@ -287,6 +288,14 @@ app.post('/api/operations/capacity-policy', async (context) => {
 		const message = error instanceof Error ? error.message : 'Organization capacity policy could not be updated';
 		if (error instanceof OrganizationCapacityPolicyConflictError) return context.json({ error: message }, 409);
 		return context.json({ error: message }, error instanceof OrganizationCapacityPolicyIntegrityError ? 500 : 400);
+	}
+});
+app.post('/api/operations/capacity-enforcement', async (context) => {
+	try { return context.json(organizationCapacityEnforcementStore.record(await context.req.json(),context.get('principal'),context.req.header('idempotency-key')??''),201); }
+	catch(error){
+		const message=error instanceof Error?error.message:'Organization capacity enforcement could not be updated';
+		if(error instanceof OrganizationCapacityEnforcementConflictError)return context.json({error:message},409);
+		return context.json({error:message},error instanceof OrganizationCapacityEnforcementIntegrityError?500:400);
 	}
 });
 app.post('/api/operations/capacity-claims/recover-expired', async (context) => {

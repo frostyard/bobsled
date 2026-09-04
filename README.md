@@ -26,7 +26,7 @@ Migration 48 retains each explicit repository drift check against the exact enro
 
 The first fleet-operations projection is read-only. It aggregates queued and active work by repository, measures live multi-worker usage against immutable plan budgets, and reports the extent of retained Flue evidence. It explicitly reports that no organization-wide concurrency ceiling is configured; no dashboard read reserves work, changes a quota, prunes evidence, or dispatches a model. See [fleet operations](./docs/fleet-operations.md).
 
-Migration 49 lets an authenticated operator record versioned organization workflow and provider-concurrency limits. They remain visibly observe-only until every model-bearing workflow adopts the shared atomic claim boundary; policy configuration alone cannot block, schedule, or start work.
+Migration 49 lets an authenticated operator record versioned organization workflow and provider-concurrency limits. Policy configuration alone cannot block, schedule, or start work; enforcement is a separate version-bound action after the shared claim boundary is proven.
 
 See [ROADMAP.md](./ROADMAP.md) for durable milestone status and [docs/architecture.md](./docs/architecture.md) for the control-plane design, including multi-repository change sets.
 
@@ -177,7 +177,9 @@ Bobsled's factory ledger, verified webhook inputs, and Flue observations persist
 
 Organization provider capacity uses a separate durable claim for every model-bearing lifecycle. Migration 50 records those claims atomically with the source model-call transition and releases them with terminal source evidence. The Access dashboard reports aggregate claimed Codex/Copilot slots and observe-only limit exceedances; configured organization limits do not reject work until bounded recovery and live conformance are complete.
 
-Migration 51 gives every capacity claim a two-hour lease, exceeding the longest supported provider timeout by one hour. Access remains read-only until an operator explicitly reconciles expired claims. Recovery records immutable `ambiguous` evidence, removes those claims from active occupancy, and preserves the unique source identity so it can never authorize or disguise a retry. Capacity enforcement remains disabled pending a live dispatch proof.
+Migration 51 gives every capacity claim a two-hour lease, exceeding the longest supported provider timeout by one hour. Access requires an explicit operator action to reconcile expired claims. Recovery records immutable `ambiguous` evidence, removes those claims from active occupancy, and preserves the unique source identity so it can never authorize or disguise a retry.
+
+Migration 52 adds a separate append-only enforcement decision after live Linux dispatch conformance. Enabling binds to the exact current policy version and rejects full provider claims atomically before dispatch. Expired occupancy blocks activation, and a later policy change fails closed until an operator explicitly rebinds or disables enforcement. Deployment and policy updates never enable it implicitly.
 
 M3 attempt workspaces and evidence live outside immutable releases under `BOBSLED_WORKSPACE_DIR`. Each repository declares a trusted preparation command separately from its post-change gates; clix uses `mise install`, with mise supplied as a project runtime dependency. Preparation failures are recorded before any model call. Repositories also select a typed worker-network mode: `none` or credential-free `public_dependencies`. clix permits the latter for dependency maintenance. The worker still receives no GitHub credentials or SSH agent, and trusted code—not the model—computes the diff, checks protected paths and size limits, runs required gates, and settles the attempt.
 

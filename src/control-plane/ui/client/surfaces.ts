@@ -57,6 +57,7 @@ async function accessSurface(surface) {
   }
   if (fleet) {
 	const capacity = fleet.organization.capacityPolicy;
+	const enforcement = fleet.organization.capacityEnforcement;
     body.append(el('div', { class: 'subhead', text: 'Fleet capacity' }));
     body.append(evGrid([
       ['Queued runs', String(fleet.organization.workload.pendingRuns)],
@@ -89,6 +90,20 @@ async function accessSurface(surface) {
 		catch (error) { fail(error, body); }
 	  }}),
 	]));
+	if (capacity) {
+	  const enforcementButtons = [];
+	  if (fleet.organization.enforcementMode !== 'enabled') enforcementButtons.push(el('button', { class: 'btn primary', text: fleet.organization.enforcementMode === 'blocked_policy_drift' ? 'Rebind enforcement' : 'Enable enforcement', onclick: async () => {
+		const decision = await authorize('enable_capacity_enforcement', { subject: 'capacity policy v' + capacity.version }); if (!decision.ok) return;
+		try { await post('/api/operations/capacity-enforcement', { mode: 'enabled', expectedVersion: enforcement ? enforcement.version : 0, expectedPolicyVersion: capacity.version, reason: decision.reason }); toast('Fleet capacity enforcement enabled.'); render(); }
+		catch (error) { fail(error, body); }
+	  }}));
+	  if (fleet.organization.enforcementMode !== 'disabled') enforcementButtons.push(el('button', { class: 'btn', text: 'Disable enforcement', onclick: async () => {
+		const decision = await authorize('disable_capacity_enforcement', { subject: 'capacity policy v' + capacity.version }); if (!decision.ok) return;
+		try { await post('/api/operations/capacity-enforcement', { mode: 'disabled', expectedVersion: enforcement ? enforcement.version : 0, expectedPolicyVersion: capacity.version, reason: decision.reason }); toast('Fleet limits returned to observe-only mode.'); render(); }
+		catch (error) { fail(error, body); }
+	  }}));
+	  body.append(el('div', { class: 'btnrow' }, enforcementButtons));
+	}
 	if (fleet.organization.capacityUsage.expiredClaims > 0) body.append(el('div', { class: 'btnrow' }, [el('button', { class: 'btn', text: 'Reconcile expired claims', onclick: async () => {
 	  const decision = await authorize('recover_capacity_claims', { subject: String(fleet.organization.capacityUsage.expiredClaims) + ' expired provider claim(s)' }); if (!decision.ok) return;
 	  try { const result = await post('/api/operations/capacity-claims/recover-expired', { reason: decision.reason }); toast(String(result.recoveredClaims) + ' expired claim(s) recorded as ambiguous.'); render(); }

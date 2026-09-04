@@ -41,8 +41,10 @@ test('projects fleet workload, immutable plan quotas, and retention extent witho
 	} finally { db.close(); }
 	const projector = new FleetOperationsProjector(path, () => new Date('2026-09-04T12:00:00.000Z'));
 	try {
-		const view = projector.project([repository]);
+		const view = projector.project([repository],undefined,{mode:'enabled',record:{id:'event',version:2,mode:'enabled',policyVersion:1,policySha256:'a'.repeat(64),actorId:'operator',reason:'test',createdAt:'2026-09-04T12:00:00.000Z'}});
 		assert.equal(view.organization.concurrencyLimitConfigured, false);
+		assert.equal(view.organization.enforcementMode,'enabled');
+		assert.deepEqual(view.organization.capacityEnforcement,{version:2,policyVersion:1});
 		assert.deepEqual(view.organization.workload, { pendingRuns: 1, activeRuns: 1, activeAttempts: 1, activeReviews: 1, activePublications: 1 });
 		assert.deepEqual(view.organization.multiWorkerQuota, { activePlans: 1, activeAttempts: 1, workerAttempts: { used: 2, declared: 4 }, subscriptionCalls: { openaiCodex: { used: 1, declared: 3 }, githubCopilot: { used: 1, declared: 2 } } });
 		assert.deepEqual(view.organization.capacityUsage, { activeWorkflows: 1, providerCalls: { openaiCodex: 1, githubCopilot: 0 }, wouldExceedPolicyClaims: 1, expiredClaims: 0, ambiguousClaims: 1 });

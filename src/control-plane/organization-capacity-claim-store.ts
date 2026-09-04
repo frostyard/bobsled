@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import * as v from 'valibot';
 import { dataPath } from '../paths.ts';
+import { ensureOrganizationCapacityEnforcementSchema, readCurrentOrganizationCapacityEnforcement } from './organization-capacity-enforcement-store.ts';
 import { ensureOrganizationCapacityPolicySchema, readCurrentOrganizationCapacityPolicy } from './organization-capacity-policy-store.ts';
 
 const ProviderSlotsSchema = v.pipe(v.object({
@@ -54,6 +55,7 @@ export const ORGANIZATION_CAPACITY_CLAIM_LEASE_MS = 2 * 60 * 60_000;
 
 export class OrganizationCapacityClaimConflictError extends Error {}
 export class OrganizationCapacityClaimIntegrityError extends Error {}
+export class OrganizationCapacityLimitExceededError extends Error {}
 
 export const OrganizationCapacityDispatchInventory = Object.freeze([
 	{ dispatchModule: 'implementation-worker-service.ts', claimModules: ['ledger.ts'], sourceKinds: ['execution_attempt'] },
@@ -121,6 +123,7 @@ export function ensureOrganizationCapacityClaimSchema(db: Database.Database): vo
 		INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES (50,datetime('now'));
 		INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES (51,datetime('now'));
 	`);
+	ensureOrganizationCapacityEnforcementSchema(db);
 }
 
 function evidence(row: Omit<ClaimRow, 'evidence_sha256'>): string {
@@ -174,6 +177,9 @@ export function claimOrganizationCapacity(db: Database.Database, input: unknown,
 	const wouldExceed = policy ? observed.active_workflows + 1 > policy.maxActiveWorkflows
 		|| observed.openai_codex_slots + request.slots.openaiCodex > policy.providerConcurrentCalls.openaiCodex
 		|| observed.github_copilot_slots + request.slots.githubCopilot > policy.providerConcurrentCalls.githubCopilot : false;
+	const enforcement=readCurrentOrganizationCapacityEnforcement(db);
+	if(enforcement.mode==='blocked_policy_drift')throw new OrganizationCapacityLimitExceededError('Capacity enforcement is blocked until the changed policy is explicitly reviewed');
+	if(enforcement.mode==='enabled'&&wouldExceed)throw new OrganizationCapacityLimitExceededError('Organization provider capacity is currently full');
 	const row: Omit<ClaimRow,'evidence_sha256'> = {
 		id: randomUUID(), source_kind: request.sourceKind, source_id: request.sourceId, owner_id: request.ownerId,
 		repository_id: request.repositoryId ?? null, status: 'active', openai_codex_slots: request.slots.openaiCodex,
