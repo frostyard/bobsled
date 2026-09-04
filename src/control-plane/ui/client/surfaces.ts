@@ -69,6 +69,8 @@ async function accessSurface(surface) {
 	  ['Claimed workflows', String(fleet.organization.capacityUsage.activeWorkflows)],
 	  ['Claimed provider calls', String(fleet.organization.capacityUsage.providerCalls.openaiCodex) + ' Codex · ' + String(fleet.organization.capacityUsage.providerCalls.githubCopilot) + ' Copilot'],
 	  ['Would exceed limits', String(fleet.organization.capacityUsage.wouldExceedPolicyClaims)],
+	  ['Expired claims', String(fleet.organization.capacityUsage.expiredClaims)],
+	  ['Ambiguous claims', String(fleet.organization.capacityUsage.ambiguousClaims)],
       ['Active worker plans', String(fleet.organization.multiWorkerQuota.activePlans)],
       ['Worker attempts', String(fleet.organization.multiWorkerQuota.workerAttempts.used) + ' / ' + String(fleet.organization.multiWorkerQuota.workerAttempts.declared)],
       ['Codex calls', String(fleet.organization.multiWorkerQuota.subscriptionCalls.openaiCodex.used) + ' / ' + String(fleet.organization.multiWorkerQuota.subscriptionCalls.openaiCodex.declared)],
@@ -87,6 +89,11 @@ async function accessSurface(surface) {
 		catch (error) { fail(error, body); }
 	  }}),
 	]));
+	if (fleet.organization.capacityUsage.expiredClaims > 0) body.append(el('div', { class: 'btnrow' }, [el('button', { class: 'btn', text: 'Reconcile expired claims', onclick: async () => {
+	  const decision = await authorize('recover_capacity_claims', { subject: String(fleet.organization.capacityUsage.expiredClaims) + ' expired provider claim(s)' }); if (!decision.ok) return;
+	  try { const result = await post('/api/operations/capacity-claims/recover-expired', { reason: decision.reason }); toast(String(result.recoveredClaims) + ' expired claim(s) recorded as ambiguous.'); render(); }
+	  catch (error) { fail(error, body); }
+	}})]));
   }
 
   body.append(el('div', { class: 'subhead', text: 'Repositories' }));

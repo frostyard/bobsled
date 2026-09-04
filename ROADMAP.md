@@ -220,6 +220,8 @@ Live acceptance evidence: an authenticated operator revised and finalized a stru
   - [x] Add a durable, operator-managed organization concurrency and provider-call policy in explicit observe-only mode.
   - [x] Adopt one shared atomic observe-only capacity claim across every provider-dispatch path and expose aggregate occupancy/exceedance evidence.
   - [ ] Add bounded claim expiry/recovery, live-prove dispatch conformance, then activate enforcement without partial bypasses.
+    - [x] Give every shared provider claim a two-hour lease and add explicit idempotent ambiguity recovery without retry authority.
+    - [ ] Live-prove claim, fleet visibility, and terminal release on a real provider lifecycle; then activate enforcement separately.
   - [ ] Add versioned evidence-retention policy and recoverable pruning/export maintenance.
 - [ ] Human approval queues, notifications, and historical reporting.
 
@@ -234,6 +236,8 @@ Migration 48 makes drift evidence explicit and durable. Loading Access reads onl
 Live migration-48 acceptance found three policy-old website parents whose delivery was already terminal. The impact projection now follows operator-actionable lifecycle truth: merged or closed publications, explicitly resolved stale-publication supersessions, verified no-change outcomes, and archived runs are excluded without changing their retained evidence.
 
 The first fleet dashboard is a side-effect-free projection over existing durable ledgers. It reports pending and active runs, attempts, reviews, and publications by repository; aggregates active multi-worker attempts and provider calls against the immutable budgets that authorized those plans; and exposes retained Flue event count, bytes, and oldest/newest timestamps. It states that organization concurrency is not configured and retention remains indefinite. The projection cannot reserve a slot, change policy, remove evidence, schedule work, or dispatch a model.
+
+Migration 51 bounds the shared capacity claim without treating timeout as success or failure. Each claim expires two hours after the atomic provider transition, beyond every supported model-call timeout. An explicit principal-scoped, idempotent recovery batch may mark only expired active claims `ambiguous`, release their aggregate occupancy, and retain the operator, reason, cutoff, provider slots, and digest-bound result. The unique source identity remains permanently consumed, so ambiguity recovery cannot retry a call or alter its source workflow. Reads expose only aggregate expired and ambiguous counts, and enforcement remains disabled pending live conformance.
 
 ## Current safety boundary
 

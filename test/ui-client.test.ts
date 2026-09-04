@@ -253,7 +253,7 @@ test('the Access surface shows repository alignment and bounded drift findings',
 		'/api/github-app/authority': { status: 'within_policy', excessPermissions: [] },
 		'/api/github-app/status': { configured: true, webhooks: { total: 4 } },
 		'/api/observability/status': { total: 12, storedBytes: 1024 },
-		'/api/operations/fleet': { organization: { workload: { pendingRuns: 2, activeRuns: 1, activeAttempts: 1, activeReviews: 0, activePublications: 0 }, concurrencyLimitConfigured: true, enforcementMode: 'disabled', capacityPolicy: { version: 2, maxActiveWorkflows: 4, providerConcurrentCalls: { openaiCodex: 2, githubCopilot: 1 } }, capacityUsage: { activeWorkflows: 1, providerCalls: { openaiCodex: 1, githubCopilot: 0 }, wouldExceedPolicyClaims: 0 }, multiWorkerQuota: { activePlans: 1, activeAttempts: 1, workerAttempts: { used: 2, declared: 4 }, subscriptionCalls: { openaiCodex: { used: 1, declared: 3 }, githubCopilot: { used: 0, declared: 1 } } } }, observability: { retentionMode: 'indefinite' }, repositories: [] },
+		'/api/operations/fleet': { organization: { workload: { pendingRuns: 2, activeRuns: 1, activeAttempts: 1, activeReviews: 0, activePublications: 0 }, concurrencyLimitConfigured: true, enforcementMode: 'disabled', capacityPolicy: { version: 2, maxActiveWorkflows: 4, providerConcurrentCalls: { openaiCodex: 2, githubCopilot: 1 } }, capacityUsage: { activeWorkflows: 1, providerCalls: { openaiCodex: 1, githubCopilot: 0 }, wouldExceedPolicyClaims: 0, expiredClaims: 0, ambiguousClaims: 0 }, multiWorkerQuota: { activePlans: 1, activeAttempts: 1, workerAttempts: { used: 2, declared: 4 }, subscriptionCalls: { openaiCodex: { used: 1, declared: 3 }, githubCopilot: { used: 0, declared: 1 } } } }, observability: { retentionMode: 'indefinite' }, repositories: [] },
 		'/api/repositories/drift': [{
 			repositoryId: 'frostyard/clix', status: 'drifted', checkedAt: new Date().toISOString(),
 			policyDigest: 'a'.repeat(64),
@@ -272,6 +272,21 @@ test('the Access surface shows repository alignment and bounded drift findings',
 	assert.match(harness.document.textContent, /Update limits/);
 	assert.match(harness.document.textContent, /Worker attempts2 \/ 4/);
 	assert.equal(harness.calls.some(({ url }) => url === '/api/repositories/drift'), true);
+});
+
+test('expired capacity claims require explicit ambiguity recovery', async () => {
+	const harness = await boot({
+		'/api/repositories': repositories,
+		'/api/github-app/authority': { status: 'within_policy', excessPermissions: [] },
+		'/api/operations/fleet': { organization: { workload: { pendingRuns: 0, activeRuns: 0, activeAttempts: 0, activeReviews: 0, activePublications: 0 }, concurrencyLimitConfigured: true, enforcementMode: 'disabled', capacityPolicy: { version: 1, maxActiveWorkflows: 4, providerConcurrentCalls: { openaiCodex: 2, githubCopilot: 1 } }, capacityUsage: { activeWorkflows: 1, providerCalls: { openaiCodex: 1, githubCopilot: 0 }, wouldExceedPolicyClaims: 0, expiredClaims: 1, ambiguousClaims: 0 }, multiWorkerQuota: { activePlans: 0, activeAttempts: 0, workerAttempts: { used: 0, declared: 0 }, subscriptionCalls: { openaiCodex: { used: 0, declared: 0 }, githubCopilot: { used: 0, declared: 0 } } } }, observability: { retentionMode: 'indefinite' }, repositories: [] },
+		'/api/repositories/drift': [], '/api/repository-enrollments': [],
+	}, '/access');
+	const button = harness.document.querySelectorAll('.btn').find((node) => node.textContent === 'Reconcile expired claims');
+	assert.ok(button);
+	button.dispatch('click'); await harness.flush();
+	assert.equal(harness.sheet()?.dataset.open,'true');
+	assert.match(harness.sheet()!.textContent,/cannot authorize a second provider call/);
+	assert.equal(harness.calls.some(({url}) => url === '/api/operations/capacity-claims/recover-expired'),false);
 });
 
 test('a durable action opens the authorization sheet and does not fire until it is confirmed', async () => {

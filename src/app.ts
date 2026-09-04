@@ -31,6 +31,7 @@ import { repositoryDriftObservationStore, RepositoryDriftObservationConflictErro
 import { repositoryEnrollmentService, RepositoryEnrollmentPolicyError, RepositoryEnrollmentUpstreamError } from './control-plane/repository-enrollment-service.ts';
 import { fleetOperationsProjector } from './control-plane/fleet-operations-view.ts';
 import { organizationCapacityPolicyStore, OrganizationCapacityPolicyConflictError, OrganizationCapacityPolicyIntegrityError } from './control-plane/organization-capacity-policy-store.ts';
+import { organizationCapacityClaims, OrganizationCapacityClaimConflictError, OrganizationCapacityClaimIntegrityError } from './control-plane/organization-capacity-claim-store.ts';
 import { RepositoryEnrollmentConflictError, RepositoryEnrollmentIntegrityError } from './control-plane/repository-enrollment-store.ts';
 import { triageWorkItem } from './control-plane/triage-service.ts';
 import { IntakeConversationConflictError, IntakeConversationForbiddenError, IntakeConversationNotFoundError, IntakeConversationStore } from './control-plane/intake-conversation-store.ts';
@@ -286,6 +287,14 @@ app.post('/api/operations/capacity-policy', async (context) => {
 		const message = error instanceof Error ? error.message : 'Organization capacity policy could not be updated';
 		if (error instanceof OrganizationCapacityPolicyConflictError) return context.json({ error: message }, 409);
 		return context.json({ error: message }, error instanceof OrganizationCapacityPolicyIntegrityError ? 500 : 400);
+	}
+});
+app.post('/api/operations/capacity-claims/recover-expired', async (context) => {
+	try { return context.json(organizationCapacityClaims.recoverExpired(await context.req.json(), context.get('principal').id, context.req.header('idempotency-key') ?? ''), 201); }
+	catch (error) {
+		const message = error instanceof Error ? error.message : 'Expired capacity claims could not be reconciled';
+		if (error instanceof OrganizationCapacityClaimConflictError) return context.json({ error: message }, 409);
+		return context.json({ error: message }, error instanceof OrganizationCapacityClaimIntegrityError ? 500 : 400);
 	}
 });
 

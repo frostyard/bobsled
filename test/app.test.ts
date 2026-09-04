@@ -249,11 +249,20 @@ test('reports bounded fleet workload, quota, and retention metadata without exec
 	const view = await response.json() as Record<string, any>;
 	assert.equal(typeof view.organization.concurrencyLimitConfigured, 'boolean');
 	assert.equal(view.organization.enforcementMode, 'disabled');
-	assert.deepEqual(Object.keys(view.organization.capacityUsage).sort(), ['activeWorkflows','providerCalls','wouldExceedPolicyClaims']);
+	assert.deepEqual(Object.keys(view.organization.capacityUsage).sort(), ['activeWorkflows','ambiguousClaims','expiredClaims','providerCalls','wouldExceedPolicyClaims']);
 	assert.equal(Array.isArray(view.repositories), true);
 	assert.equal(view.repositories.length, 3);
 	assert.equal(view.observability.retentionMode, 'indefinite');
 	for (const forbidden of ['token','credential','payload','events']) assert.equal(forbidden in view, false);
+});
+
+test('reconciles expired provider claims only through an explicit idempotent operator action', async () => {
+	const response = await app.request('/api/operations/capacity-claims/recover-expired', {
+		method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `capacity-recovery-${randomUUID()}` }, body: JSON.stringify({ reason: 'Retire provider claims beyond their bounded lease.' }),
+	});
+	assert.equal(response.status, 201);
+	const result = await response.json() as Record<string, unknown>;
+	assert.equal(typeof result.recoveredClaims, 'number');
 });
 
 test('records organization capacity policy without activating enforcement', async () => {
