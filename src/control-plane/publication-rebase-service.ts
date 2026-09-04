@@ -84,6 +84,18 @@ function digest(value: string): string { return createHash('sha256').update(valu
 function paths(value: string): string[] { return value.split('\0').filter(Boolean); }
 function samePaths(left: readonly string[], right: readonly string[]): boolean { return [...new Set(left)].sort().join('\0') === [...new Set(right)].sort().join('\0'); }
 
+function githubRemoteRepository(remoteUrl: string): string | undefined {
+	const scp = /^git@github\.com:([^?#]+)$/.exec(remoteUrl);
+	if (scp) return scp[1]!.replace(/\.git$/, '').replace(/\/$/, '');
+	let parsed: URL;
+	try { parsed = new URL(remoteUrl); } catch { return undefined; }
+	if (parsed.hostname.toLowerCase() !== 'github.com' || parsed.port || parsed.password || parsed.search || parsed.hash) return undefined;
+	if (parsed.protocol === 'https:' && parsed.username) return undefined;
+	if (parsed.protocol === 'ssh:' && parsed.username !== 'git') return undefined;
+	if (parsed.protocol !== 'https:' && parsed.protocol !== 'ssh:') return undefined;
+	return parsed.pathname.replace(/^\//, '').replace(/\.git$/, '').replace(/\/$/, '');
+}
+
 function matchesProtectedPath(path: string, pattern: string): boolean {
 	if (pattern.endsWith('/**')) { const prefix = pattern.slice(0, -3); return path === prefix || path.startsWith(`${prefix}/`); }
 	return path === pattern;
@@ -220,8 +232,8 @@ export class PublicationRebaseService {
 		if (remoteBase === record.oldBaseCommit) return this.#block(id, principal, 'remote_base_unchanged', 'Remote default branch has not advanced beyond the approved base');
 
 		const source = await this.#sourceCheckout(record.repositoryId);
-		const localBase = await this.#git(source, ['rev-parse', '--verify', `${context.repository.defaultBranch}^{commit}`]);
-		if (localBase !== remoteBase) return this.#block(id, principal, 'local_source_stale', 'Trusted source checkout does not contain the current remote default-branch commit');
+		try { await this.#ensureRemoteBase(source, context.repository, remoteBase); }
+		catch (error) { return this.#block(id, principal, 'local_source_stale', error instanceof Error ? error.message : 'Trusted source checkout could not be refreshed safely'); }
 		const descendant = await this.#gitResult(source, ['merge-base', '--is-ancestor', record.oldBaseCommit, remoteBase]);
 		if (descendant.exitCode !== 0) return this.#block(id, principal, 'base_not_descendant', 'Current default branch is not a descendant of the approved base');
 
@@ -342,6 +354,32 @@ export class PublicationRebaseService {
 		return source;
 	}
 
+	async #ensureRemoteBase(source: string, repository: RepositoryContract, remoteBase: string): Promise<void> {
+		const initialHead = await this.#git(source, ['rev-parse', '--verify', 'HEAD^{commit}']);
+		const initialStatus = await this.#git(source, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], false);
+		if (initialStatus.length > 0) throw new PublicationRebaseConflictError('Trusted source checkout is dirty; automatic refresh was refused');
+		if ((await this.#gitResult(source, ['cat-file', '-e', `${remoteBase}^{commit}`])).exitCode !== 0) {
+			if ((await this.#gitResult(source, ['check-ref-format', '--branch', repository.defaultBranch])).exitCode !== 0) {
+				throw new PublicationRebaseConflictError('Enrolled default branch is not a safe Git branch name');
+			}
+			const remoteUrl = await this.#git(source, ['config', '--get', 'remote.origin.url']);
+			if (githubRemoteRepository(remoteUrl)?.toLowerCase() !== repository.id.toLowerCase()) {
+				throw new PublicationRebaseConflictError('Trusted source origin does not match the enrolled GitHub repository');
+			}
+			const refreshRef = `refs/bobsled/remotes/${repository.defaultBranch}`;
+			const fetched = await this.#gitResult(source, [
+				'fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--force', 'origin',
+				`refs/heads/${repository.defaultBranch}:${refreshRef}`,
+			]);
+			if (fetched.exitCode !== 0) throw new PublicationRebaseConflictError('Trusted source refresh failed without advancing the checkout');
+			const fetchedCommit = await this.#git(source, ['rev-parse', '--verify', `${refreshRef}^{commit}`]);
+			if (fetchedCommit !== remoteBase) throw new PublicationRebaseConflictError('Fetched default branch does not match GitHub’s authoritative commit');
+		}
+		const finalHead = await this.#git(source, ['rev-parse', '--verify', 'HEAD^{commit}']);
+		const finalStatus = await this.#git(source, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], false);
+		if (finalHead !== initialHead || finalStatus.length > 0) throw new PublicationRebaseConflictError('Trusted source refresh changed the checked-out branch or worktree');
+	}
+
 	async #diffLines(workspacePath: string, base: string): Promise<number> {
 		const numstat = await this.#git(workspacePath, ['diff', '--numstat', '--no-renames', base, '--']);
 		return numstat.split('\n').filter(Boolean).reduce((sum, line) => {
@@ -369,7 +407,7 @@ export class PublicationRebaseService {
 
 	async #gitResult(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
 		try {
-			const result = await execFileAsync('git', args, { cwd, timeout: 60_000, maxBuffer: MAX_GIT_OUTPUT_BYTES, encoding: 'utf8', env: { PATH: process.env.PATH ?? '', LANG: process.env.LANG ?? 'C.UTF-8', GIT_TERMINAL_PROMPT: '0' } });
+			const result = await execFileAsync('git', args, { cwd, timeout: 60_000, maxBuffer: MAX_GIT_OUTPUT_BYTES, encoding: 'utf8', env: { PATH: process.env.PATH ?? '', LANG: process.env.LANG ?? 'C.UTF-8', GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never' } });
 			return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
 		} catch (error) {
 			const failure = error as Error & { stdout?: string; stderr?: string; code?: number | string };

@@ -72,6 +72,19 @@ function fixture(options: { conflict?: boolean } = {}) {
 	return { root, sourceRoot, source, oldWorkspace, oldBaseCommit, newBaseCommit, sourcePublicationId, context };
 }
 
+function makeTrustedSourceStale(value: ReturnType<typeof fixture>, remoteRepositoryId = 'frostyard/frostyard-org'): string {
+	const remote = join(value.root, 'remote.git');
+	execFileSync('git', ['init', '--quiet', '--bare', remote]);
+	git(value.source, ['push', '--quiet', remote, 'main:main']);
+	git(value.source, ['reset', '--quiet', '--hard', value.oldBaseCommit]);
+	git(value.source, ['reflog', 'expire', '--expire=now', '--all']);
+	git(value.source, ['gc', '--quiet', '--prune=now']);
+	const githubUrl = `https://github.com/${remoteRepositoryId}.git`;
+	git(value.source, ['remote', 'add', 'origin', githubUrl]);
+	git(value.source, ['config', `url.file://${remote}/.insteadOf`, githubUrl]);
+	return remote;
+}
+
 function service(value: ReturnType<typeof fixture>, runner?: IntegrationCommandRunner) {
 	const calls: string[] = [];
 	const commandRunner: IntegrationCommandRunner = runner ?? (async (command) => {
@@ -110,6 +123,71 @@ test('replays the exact approved patch on a descendant base and records zero-mod
 		assert.deepEqual(calls, ['prepare', 'verify']);
 		assert.match(readFileSync(join(result.workspacePath!, 'app.txt'), 'utf8'), /approved change/);
 		assert.throws(() => instance.admit({ sourcePublicationId: value.sourcePublicationId, reason: 'A validated replay cannot be duplicated.' }, owner, 'after-validation'), PublicationRebaseConflictError);
+	} finally { instance.close(); }
+});
+
+test('fetches an exact missing remote base without advancing or dirtying the trusted checkout', async () => {
+	const value = fixture(); makeTrustedSourceStale(value); const { instance, calls } = service(value);
+	try {
+		assert.equal(git(value.source, ['rev-parse', 'main']), value.oldBaseCommit);
+		const admitted = instance.admit({ sourcePublicationId: value.sourcePublicationId, reason: 'Refresh the trusted source before exact replay.' }, owner, 'source-refresh');
+		const result = await instance.execute(admitted.id, owner);
+		assert.equal(result.status, 'validated');
+		assert.equal(result.newBaseCommit, value.newBaseCommit);
+		assert.equal(result.modelCalls, 0);
+		assert.deepEqual(calls, ['prepare', 'verify']);
+		assert.equal(git(value.source, ['rev-parse', 'main']), value.oldBaseCommit);
+		assert.equal(git(value.source, ['rev-parse', 'refs/bobsled/remotes/main']), value.newBaseCommit);
+		assert.equal(git(value.source, ['status', '--porcelain=v1', '--untracked-files=all']), '');
+	} finally { instance.close(); }
+});
+
+test('refuses dirty or unexpected trusted sources before refresh, preparation, or model spend', async () => {
+	const dirty = fixture(); makeTrustedSourceStale(dirty); writeFileSync(join(dirty.source, 'untrusted.txt'), 'not part of the trusted source\n');
+	const first = service(dirty);
+	try {
+		const admitted = first.instance.admit({ sourcePublicationId: dirty.sourcePublicationId, reason: 'A dirty trusted source must fail closed.' }, owner, 'dirty-source-refresh');
+		const result = await first.instance.execute(admitted.id, owner);
+		assert.equal(result.status, 'blocked');
+		assert.equal(result.blockReason, 'local_source_stale');
+		assert.match(result.detail ?? '', /dirty/);
+		assert.equal(result.modelCalls, 0);
+		assert.deepEqual(first.calls, []);
+		assert.equal(git(dirty.source, ['rev-parse', 'main']), dirty.oldBaseCommit);
+	} finally { first.instance.close(); }
+
+	const unexpected = fixture(); makeTrustedSourceStale(unexpected, 'frostyard/not-the-enrolled-repository');
+	const second = service(unexpected);
+	try {
+		const admitted = second.instance.admit({ sourcePublicationId: unexpected.sourcePublicationId, reason: 'An unexpected origin must fail closed.' }, owner, 'unexpected-origin-refresh');
+		const result = await second.instance.execute(admitted.id, owner);
+		assert.equal(result.status, 'blocked');
+		assert.equal(result.blockReason, 'local_source_stale');
+		assert.match(result.detail ?? '', /does not match/);
+		assert.equal(result.modelCalls, 0);
+		assert.deepEqual(second.calls, []);
+		assert.equal(git(unexpected.source, ['rev-parse', 'main']), unexpected.oldBaseCommit);
+	} finally { second.instance.close(); }
+});
+
+test('rejects a fetched branch that does not equal GitHub’s authoritative commit', async () => {
+	const value = fixture(); makeTrustedSourceStale(value);
+	const calls: string[] = [];
+	const instance = new PublicationRebaseService({
+		path: join(value.root, 'bobsled-mismatch.db'), workspaceRoot: join(value.root, 'workspaces-mismatch'), repositorySourceRoot: value.sourceRoot,
+		remoteBaseResolver: async () => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+		runner: async (command) => { calls.push(command); return { status: 'passed', exitCode: 0, durationMs: 1, stdout: '', stderr: '', truncated: false }; },
+		sourceResolver: () => value.context,
+	});
+	try {
+		const admitted = instance.admit({ sourcePublicationId: value.sourcePublicationId, reason: 'Reject remote evidence that differs from GitHub.' }, owner, 'mismatched-refresh');
+		const result = await instance.execute(admitted.id, owner);
+		assert.equal(result.status, 'blocked');
+		assert.equal(result.blockReason, 'local_source_stale');
+		assert.match(result.detail ?? '', /does not match GitHub/);
+		assert.equal(result.modelCalls, 0);
+		assert.deepEqual(calls, []);
+		assert.equal(git(value.source, ['rev-parse', 'main']), value.oldBaseCommit);
 	} finally { instance.close(); }
 });
 
