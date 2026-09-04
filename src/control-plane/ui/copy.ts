@@ -61,6 +61,13 @@ export interface AuthorityCopy {
 }
 
 export const AUTHORITY: Record<string, AuthorityCopy> = {
+	configure_capacity_policy: {
+		title: 'Save these fleet limits?', confirm: 'Save limits',
+		grants: ['Record a versioned organization capacity policy', 'Make these limits available to the future shared claim gate'],
+		denies: ['Start, stop, or schedule work', 'Activate enforcement before every provider path adopts the shared claim gate', 'Spend a model call or touch GitHub'],
+		placeholder: 'Why these organization limits are appropriate.',
+		note: 'This release records and displays the policy in observe-only mode. Enforcement remains disabled until every provider path is covered.',
+	},
 	enroll_repository: {
 		title: 'Enroll this repository?', confirm: 'Enroll repository',
 		grants: ['Import the versioned .bobsled/repository.json policy', 'Make the repository available according to that policy'],

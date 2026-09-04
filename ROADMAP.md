@@ -217,7 +217,8 @@ Live acceptance evidence: an authenticated operator revised and finalized a stru
   - [x] Retain version-bound enrollment observations and surface open, non-archived work whose policy snapshot differs from current enrollment.
 - [ ] Fleet concurrency, quotas, observability retention, and operational dashboards.
   - [x] Project repository and organization workload, active immutable multi-worker budget utilization, and retained observability extent without scheduling authority.
-  - [ ] Add a durable, operator-managed organization concurrency and provider-call policy, then enforce it atomically before new work claims.
+  - [x] Add a durable, operator-managed organization concurrency and provider-call policy in explicit observe-only mode.
+  - [ ] Adopt one shared atomic capacity claim across every provider-dispatch path, then activate enforcement without partial bypasses.
   - [ ] Add versioned evidence-retention policy and recoverable pruning/export maintenance.
 - [ ] Human approval queues, notifications, and historical reporting.
 

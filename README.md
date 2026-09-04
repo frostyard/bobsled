@@ -26,6 +26,8 @@ Migration 48 retains each explicit repository drift check against the exact enro
 
 The first fleet-operations projection is read-only. It aggregates queued and active work by repository, measures live multi-worker usage against immutable plan budgets, and reports the extent of retained Flue evidence. It explicitly reports that no organization-wide concurrency ceiling is configured; no dashboard read reserves work, changes a quota, prunes evidence, or dispatches a model. See [fleet operations](./docs/fleet-operations.md).
 
+Migration 49 lets an authenticated operator record versioned organization workflow and provider-concurrency limits. They remain visibly observe-only until every model-bearing workflow adopts the shared atomic claim boundary; policy configuration alone cannot block, schedule, or start work.
+
 See [ROADMAP.md](./ROADMAP.md) for durable milestone status and [docs/architecture.md](./docs/architecture.md) for the control-plane design, including multi-repository change sets.
 
 ## Requirements

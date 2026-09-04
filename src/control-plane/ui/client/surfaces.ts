@@ -56,6 +56,7 @@ async function accessSurface(surface) {
     ]));
   }
   if (fleet) {
+	const capacity = fleet.organization.capacityPolicy;
     body.append(el('div', { class: 'subhead', text: 'Fleet capacity' }));
     body.append(evGrid([
       ['Queued runs', String(fleet.organization.workload.pendingRuns)],
@@ -63,13 +64,26 @@ async function accessSurface(surface) {
       ['Active attempts', String(fleet.organization.workload.activeAttempts)],
       ['Active reviews', String(fleet.organization.workload.activeReviews)],
       ['Active publications', String(fleet.organization.workload.activePublications)],
-      ['Organization ceiling', fleet.organization.concurrencyLimitConfigured ? 'configured' : 'not configured'],
+	  ['Organization ceiling', capacity ? String(capacity.maxActiveWorkflows) + ' workflows' : 'not configured'],
+	  ['Enforcement', fleet.organization.enforcementMode === 'disabled' ? 'observe only' : fleet.organization.enforcementMode],
       ['Active worker plans', String(fleet.organization.multiWorkerQuota.activePlans)],
       ['Worker attempts', String(fleet.organization.multiWorkerQuota.workerAttempts.used) + ' / ' + String(fleet.organization.multiWorkerQuota.workerAttempts.declared)],
       ['Codex calls', String(fleet.organization.multiWorkerQuota.subscriptionCalls.openaiCodex.used) + ' / ' + String(fleet.organization.multiWorkerQuota.subscriptionCalls.openaiCodex.declared)],
       ['Copilot calls', String(fleet.organization.multiWorkerQuota.subscriptionCalls.githubCopilot.used) + ' / ' + String(fleet.organization.multiWorkerQuota.subscriptionCalls.githubCopilot.declared)],
       ['Observation retention', fleet.observability.retentionMode],
     ]));
+	const total = el('input', { type: 'number', min: '1', max: '32', value: capacity ? capacity.maxActiveWorkflows : '4', 'aria-label': 'Maximum active workflows' });
+	const codex = el('input', { type: 'number', min: '1', max: '32', value: capacity ? capacity.providerConcurrentCalls.openaiCodex : '2', 'aria-label': 'Maximum concurrent Codex calls' });
+	const copilot = el('input', { type: 'number', min: '1', max: '32', value: capacity ? capacity.providerConcurrentCalls.githubCopilot : '2', 'aria-label': 'Maximum concurrent Copilot calls' });
+	body.append(el('div', { class: 'filerow' }, [
+	  el('label', { text: 'Workflows ' }, [total]), el('label', { text: 'Codex ' }, [codex]), el('label', { text: 'Copilot ' }, [copilot]),
+	  el('button', { class: 'btn', text: capacity ? 'Update limits' : 'Set limits', onclick: async () => {
+		const policy = { maxActiveWorkflows: Number(total.value), providerConcurrentCalls: { openaiCodex: Number(codex.value), githubCopilot: Number(copilot.value) } };
+		const decision = await authorize('configure_capacity_policy', { subject: 'Frostyard organization capacity' }); if (!decision.ok) return;
+		try { await post('/api/operations/capacity-policy', { policy: policy, expectedVersion: capacity ? capacity.version : 0, reason: decision.reason }); toast('Fleet limits recorded in observe-only mode.'); render(); }
+		catch (error) { fail(error, body); }
+	  }}),
+	]));
   }
 
   body.append(el('div', { class: 'subhead', text: 'Repositories' }));

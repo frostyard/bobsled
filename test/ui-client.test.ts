@@ -253,7 +253,7 @@ test('the Access surface shows repository alignment and bounded drift findings',
 		'/api/github-app/authority': { status: 'within_policy', excessPermissions: [] },
 		'/api/github-app/status': { configured: true, webhooks: { total: 4 } },
 		'/api/observability/status': { total: 12, storedBytes: 1024 },
-		'/api/operations/fleet': { organization: { workload: { pendingRuns: 2, activeRuns: 1, activeAttempts: 1, activeReviews: 0, activePublications: 0 }, concurrencyLimitConfigured: false, multiWorkerQuota: { activePlans: 1, activeAttempts: 1, workerAttempts: { used: 2, declared: 4 }, subscriptionCalls: { openaiCodex: { used: 1, declared: 3 }, githubCopilot: { used: 0, declared: 1 } } } }, observability: { retentionMode: 'indefinite' }, repositories: [] },
+		'/api/operations/fleet': { organization: { workload: { pendingRuns: 2, activeRuns: 1, activeAttempts: 1, activeReviews: 0, activePublications: 0 }, concurrencyLimitConfigured: true, enforcementMode: 'disabled', capacityPolicy: { version: 2, maxActiveWorkflows: 4, providerConcurrentCalls: { openaiCodex: 2, githubCopilot: 1 } }, multiWorkerQuota: { activePlans: 1, activeAttempts: 1, workerAttempts: { used: 2, declared: 4 }, subscriptionCalls: { openaiCodex: { used: 1, declared: 3 }, githubCopilot: { used: 0, declared: 1 } } } }, observability: { retentionMode: 'indefinite' }, repositories: [] },
 		'/api/repositories/drift': [{
 			repositoryId: 'frostyard/clix', status: 'drifted', checkedAt: new Date().toISOString(),
 			policyDigest: 'a'.repeat(64),
@@ -267,7 +267,9 @@ test('the Access surface shows repository alignment and bounded drift findings',
 	assert.match(harness.document.textContent, /Check repository drift/);
 	assert.match(harness.document.textContent, /Find installed repositories/);
 	assert.match(harness.document.textContent, /Fleet capacity/);
-	assert.match(harness.document.textContent, /Organization ceilingnot configured/);
+	assert.match(harness.document.textContent, /Organization ceiling4 workflows/);
+	assert.match(harness.document.textContent, /Enforcementobserve only/);
+	assert.match(harness.document.textContent, /Update limits/);
 	assert.match(harness.document.textContent, /Worker attempts2 \/ 4/);
 	assert.equal(harness.calls.some(({ url }) => url === '/api/repositories/drift'), true);
 });
