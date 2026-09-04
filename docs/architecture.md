@@ -10,6 +10,8 @@ Migration 47 replaces the runtime source array as the repository authority with 
 
 Migration 48 persists explicit drift checks rather than making Access page reads call GitHub. Each batch is principal/idempotency scoped and each observation is bound to one retained enrollment version, policy digest, normalized finding set, and timestamp. Reads verify that lineage before projecting the latest result and observation count. A separate live impact query compares current policy with immutable snapshots on operator-actionable, non-archived runs, excluding merged or closed delivery, resolved supersession, and verified no-change evidence. It reports bounded counts and run links but grants no cancellation, retry, policy replacement, scheduling, model, or GitHub-write authority.
 
+The initial fleet-operations view adds no schema and no claim path. It reads existing run, attempt, review, publication, multi-worker budget, and Flue observation ledgers in one SQLite read transaction, then returns bounded aggregate counts. Per-plan quota denominators come only from immutable budget snapshots; they are not editable through the projection. The response explicitly distinguishes those enforced plan limits from the organization-wide concurrency ceiling, which remains unconfigured. Retention is reported as indefinite until a later versioned policy introduces recoverable pruning or export.
+
 ## Schema boundaries
 
 - **Repository contract** — enrolled identity, default branch, agent instruction surfaces, quality gates, protected paths, and allowed capabilities.

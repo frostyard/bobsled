@@ -29,6 +29,7 @@ import { getRepository, repositories } from './control-plane/repositories.ts';
 import { repositoryDriftService } from './control-plane/repository-drift.ts';
 import { repositoryDriftObservationStore, RepositoryDriftObservationConflictError, RepositoryDriftObservationIntegrityError } from './control-plane/repository-drift-observation-store.ts';
 import { repositoryEnrollmentService, RepositoryEnrollmentPolicyError, RepositoryEnrollmentUpstreamError } from './control-plane/repository-enrollment-service.ts';
+import { fleetOperationsProjector } from './control-plane/fleet-operations-view.ts';
 import { RepositoryEnrollmentConflictError, RepositoryEnrollmentIntegrityError } from './control-plane/repository-enrollment-store.ts';
 import { triageWorkItem } from './control-plane/triage-service.ts';
 import { IntakeConversationConflictError, IntakeConversationForbiddenError, IntakeConversationNotFoundError, IntakeConversationStore } from './control-plane/intake-conversation-store.ts';
@@ -271,6 +272,7 @@ app.get('/api/github-app/status', (context) => context.json({ ...githubAppStatus
 app.get('/api/github-app/authority', (context) => context.json(auditGitHubPermissions(githubEventStore.latestInstallationSnapshot())));
 app.get('/api/operator-auth/status', (context) => context.json(operatorAuthStatus()));
 app.get('/api/observability/status', (context) => context.json(flueObservationStore.metrics()));
+app.get('/api/operations/fleet', (context) => context.json(fleetOperationsProjector.project(repositoryEnrollmentService.list().map(({ repository }) => repository))));
 
 app.get('/auth/github/login', (context) => {
 	const configuration = operatorAuthConfiguration();

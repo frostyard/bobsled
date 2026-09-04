@@ -66,11 +66,11 @@ test('lists bounded durable repository enrollment state', async () => {
 	}
 });
 
-test('reads no repository drift until an explicit check records bounded observations', async () => {
+test('reads retained repository drift and appends only on an explicit check', async () => {
 	const response = await app.request('/api/repositories/drift');
 	assert.equal(response.status, 200);
 	const records = await response.json() as Array<Record<string, unknown>>;
-	assert.deepEqual(records, []);
+	const priorCounts = new Map(records.map((record) => [record.repositoryId, Number(record.observationCount)]));
 	const idempotencyKey = `drift-${randomUUID()}`;
 	const checked = await app.request('/api/repositories/drift/check', { method: 'POST', headers: { 'idempotency-key': idempotencyKey } });
 	assert.equal(checked.status, 200);
@@ -79,7 +79,7 @@ test('reads no repository drift until an explicit check records bounded observat
 	for (const record of observations) {
 		assert.equal(record.status, 'unavailable');
 		assert.deepEqual(record.findings, [{ kind: 'unreachable' }]);
-		assert.equal(record.observationCount, 1);
+		assert.equal(record.observationCount, (priorCounts.get(record.repositoryId) ?? 0) + 1);
 		assert.deepEqual(record.policyImpact, { changedOpenRunCount: 0, byStatus: { pending: 0, running: 0, succeeded: 0, blocked: 0 }, sampleRunIds: [], truncated: false });
 		for (const forbidden of ['token', 'permissions', 'githubRepositoryId', 'error']) assert.equal(forbidden in record, false);
 	}
@@ -241,6 +241,17 @@ test('reports aggregate observability health without exposing event content', as
 	for (const key of ['byType', 'processes', 'storedBytes', 'total']) assert.equal(key in status, true);
 	assert.equal(Object.keys(status).every((key) => ['byType', 'lastObservedAt', 'processes', 'storedBytes', 'total'].includes(key)), true);
 	assert.equal('payload' in status, false);
+});
+
+test('reports bounded fleet workload, quota, and retention metadata without execution authority', async () => {
+	const response = await app.request('/api/operations/fleet');
+	assert.equal(response.status, 200);
+	const view = await response.json() as Record<string, any>;
+	assert.equal(view.organization.concurrencyLimitConfigured, false);
+	assert.equal(Array.isArray(view.repositories), true);
+	assert.equal(view.repositories.length, 3);
+	assert.equal(view.observability.retentionMode, 'indefinite');
+	for (const forbidden of ['token','credential','payload','events']) assert.equal(forbidden in view, false);
 });
 
 test('admits GitHub issue actions as blocked evidence while repository writes are disabled', async () => {
