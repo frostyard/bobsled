@@ -289,6 +289,18 @@ test('expired capacity claims require explicit ambiguity recovery', async () => 
 	assert.equal(harness.calls.some(({url}) => url === '/api/operations/capacity-claims/recover-expired'),false);
 });
 
+test('capacity enforcement requires a separate explicit authorization sheet',async()=>{
+	const harness=await boot({
+		'/api/repositories':repositories,
+		'/api/github-app/authority':{status:'within_policy',excessPermissions:[]},
+		'/api/operations/fleet':{organization:{workload:{pendingRuns:0,activeRuns:0,activeAttempts:0,activeReviews:0,activePublications:0},concurrencyLimitConfigured:true,enforcementMode:'disabled',capacityPolicy:{version:1,maxActiveWorkflows:4,providerConcurrentCalls:{openaiCodex:2,githubCopilot:1}},capacityUsage:{activeWorkflows:0,providerCalls:{openaiCodex:0,githubCopilot:0},wouldExceedPolicyClaims:0,expiredClaims:0,ambiguousClaims:0},multiWorkerQuota:{activePlans:0,activeAttempts:0,workerAttempts:{used:0,declared:0},subscriptionCalls:{openaiCodex:{used:0,declared:0},githubCopilot:{used:0,declared:0}}}},observability:{retentionMode:'indefinite'},repositories:[]},
+		'/api/repositories/drift':[],'/api/repository-enrollments':[],
+	},'/access');
+	const button=harness.document.querySelectorAll('.btn').find((node)=>node.textContent==='Enable enforcement');assert.ok(button);button.dispatch('click');await harness.flush();
+	assert.equal(harness.sheet()?.dataset.open,'true');assert.match(harness.sheet()!.textContent,/Reject new provider claims atomically/);assert.match(harness.sheet()!.textContent,/still cannot do/i);
+	assert.equal(harness.calls.some(({url})=>url==='/api/operations/capacity-enforcement'),false);
+});
+
 test('a durable action opens the authorization sheet and does not fire until it is confirmed', async () => {
 	const harness = await boot({
 		'/api/repositories': repositories,

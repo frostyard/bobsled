@@ -1,6 +1,6 @@
 # Fleet operations visibility
 
-The authenticated **Access** surface includes a read-only fleet-capacity projection. It answers what is currently queued or active without creating a scheduler or pretending that Bobsled enforces an organization-wide limit it does not yet have.
+The authenticated **Access** surface includes a fleet-capacity projection and explicit policy controls. Reading it remains side-effect-free and creates no scheduler.
 
 ## Workload
 
@@ -15,6 +15,8 @@ Migration 49 adds an append-only, versioned organization policy for maximum acti
 Migration 50 adds that shared observe-only claim ledger. The durable transition that marks a provider call consumed now creates its organization claim in the same SQLite immediate transaction; terminal settlement releases the slot in the same transaction as the source outcome. Claims bind their source lifecycle, owner, repository, provider slots, current policy version, observed occupancy, and whether the configured limit would have been exceeded. Reviews conservatively hold both a Copilot and Codex slot because one authorized lifecycle may enter its bounded remediation round. A source inventory test enumerates every Flue dispatch module so a new provider path cannot appear without an explicit claim mapping. The fleet view exposes only aggregate active claims and observed exceedances. Limits remain observe-only until claim expiry/recovery and live conformance are proven; migration 50 itself rejects no work.
 
 Migration 51 adds bounded recovery without inventing a provider result. Claims expire two hours after their atomic source transition, one hour beyond the maximum supported provider timeout. Expiry alone changes nothing. An authenticated, idempotent operator action may transition at most 100 expired active claims to immutable `ambiguous` evidence and release their fleet occupancy. The original `(source_kind, source_id)` uniqueness remains consumed, so neither recovery nor a duplicate dispatch can reuse the claim. The dashboard exposes aggregate expired and ambiguous counts without source identities. Enforcement remains disabled until a real provider lifecycle proves claim, visibility, terminal release, and zero bypasses.
+
+That live Linux proof used a real Codex-backed triage submission: the shared ledger held one slot for the provider lifecycle and released it only with terminal success evidence. Migration 52 then adds enforcement as a separate versioned operator decision. Enabling binds to the exact current policy digest, refuses expired active claims, and causes the common atomic claim transition to reject before model dispatch when a ceiling is full. Every production dispatch module remains covered by the executable source inventory. Policy updates do not silently alter enforced limits; they place enforcement in a fail-closed drift state until the operator explicitly rebinds or disables it. Deployment, policy recording, and fleet reads do not enable enforcement.
 
 ## Retention
 

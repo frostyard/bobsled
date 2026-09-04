@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import * as v from 'valibot';
 import { dataPath } from '../paths.ts';
 import { RepositoryContractSchema, RepositoryPolicySnapshotSchema } from './contracts.ts';
+import type { OrganizationCapacityEnforcementState } from './organization-capacity-enforcement-store.ts';
 import type { OrganizationCapacityPolicyRecord } from './organization-capacity-policy-store.ts';
 
 const CountSchema = v.pipe(v.number(), v.integer(), v.minValue(0));
@@ -13,7 +14,8 @@ export const FleetOperationsViewSchema = v.object({
 	organization: v.object({
 		workload: WorkloadSchema,
 		concurrencyLimitConfigured: v.boolean(),
-		enforcementMode: v.literal('disabled'),
+		enforcementMode: v.picklist(['disabled','enabled','blocked_policy_drift']),
+		capacityEnforcement: v.optional(v.object({ version:CountSchema,policyVersion:CountSchema })),
 		capacityPolicy: v.optional(v.object({ version: CountSchema, maxActiveWorkflows: CountSchema, providerConcurrentCalls: v.object({ openaiCodex: CountSchema, githubCopilot: CountSchema }) })),
 		capacityUsage: CapacityUsageSchema,
 		multiWorkerQuota: MultiWorkerQuotaSchema,
@@ -44,7 +46,7 @@ export class FleetOperationsProjector {
 		return this.#db;
 	}
 
-	project(input: readonly unknown[], capacity?: OrganizationCapacityPolicyRecord): FleetOperationsView {
+	project(input: readonly unknown[], capacity?: OrganizationCapacityPolicyRecord, enforcement:OrganizationCapacityEnforcementState={mode:'disabled'}): FleetOperationsView {
 		const repositories = input.map((repository) => v.parse(RepositoryPolicySnapshotSchema, repository));
 		const db = this.#database();
 		return db.transaction(() => {
@@ -83,8 +85,9 @@ export class FleetOperationsProjector {
 			}
 			const projected = repositories.map((repository) => ({ repositoryId: repository.id, enabled: repository.enabled, workload: workloadByRepository.get(repository.id) ?? zeroWorkload(), multiWorkerQuota: quotaByRepository.get(repository.id) ?? zeroQuota() }));
 			const organization = {
-				workload: zeroWorkload(), concurrencyLimitConfigured: capacity !== undefined, enforcementMode: 'disabled' as const,
+				workload: zeroWorkload(), concurrencyLimitConfigured: capacity !== undefined, enforcementMode: enforcement.mode,
 				capacityPolicy: capacity && { version: capacity.version, ...capacity.policy },
+				capacityEnforcement: enforcement.record&&{version:enforcement.record.version,policyVersion:enforcement.record.policyVersion},
 				capacityUsage: { activeWorkflows: capacityUsageRow.active_workflows, providerCalls: { openaiCodex: capacityUsageRow.openai_codex, githubCopilot: capacityUsageRow.github_copilot }, wouldExceedPolicyClaims: capacityUsageRow.would_exceed, expiredClaims: capacityUsageRow.expired, ambiguousClaims: capacityUsageRow.ambiguous },
 				multiWorkerQuota: zeroQuota(),
 			};

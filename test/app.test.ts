@@ -265,7 +265,7 @@ test('reconciles expired provider claims only through an explicit idempotent ope
 	assert.equal(typeof result.recoveredClaims, 'number');
 });
 
-test('records organization capacity policy without activating enforcement', async () => {
+test('records policy and changes enforcement only through a separate version-bound action', async () => {
 	const before = await (await app.request('/api/operations/fleet')).json() as Record<string, any>;
 	const expectedVersion = before.organization.capacityPolicy?.version ?? 0;
 	const response = await app.request('/api/operations/capacity-policy', {
@@ -277,6 +277,13 @@ test('records organization capacity policy without activating enforcement', asyn
 	assert.equal(after.organization.concurrencyLimitConfigured, true);
 	assert.equal(after.organization.enforcementMode, 'disabled');
 	assert.equal(after.organization.capacityPolicy.version, expectedVersion + 1);
+	const enabledResponse=await app.request('/api/operations/capacity-enforcement',{method:'POST',headers:{'content-type':'application/json','idempotency-key':`capacity-enforcement-${randomUUID()}`},body:JSON.stringify({mode:'enabled',expectedVersion:after.organization.capacityEnforcement?.version??0,expectedPolicyVersion:after.organization.capacityPolicy.version,reason:'Bind enforcement only after live claim conformance.'})});
+	assert.equal(enabledResponse.status,201);
+	const enabled=await(await app.request('/api/operations/fleet')).json() as Record<string,any>;
+	assert.equal(enabled.organization.enforcementMode,'enabled');
+	const disabledResponse=await app.request('/api/operations/capacity-enforcement',{method:'POST',headers:{'content-type':'application/json','idempotency-key':`capacity-disable-${randomUUID()}`},body:JSON.stringify({mode:'disabled',expectedVersion:enabled.organization.capacityEnforcement.version,expectedPolicyVersion:enabled.organization.capacityPolicy.version,reason:'Return the shared gate to observation after the route proof.'})});
+	assert.equal(disabledResponse.status,201);
+	assert.equal((await(await app.request('/api/operations/fleet')).json() as Record<string,any>).organization.enforcementMode,'disabled');
 });
 
 test('admits GitHub issue actions as blocked evidence while repository writes are disabled', async () => {
