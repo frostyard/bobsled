@@ -21,7 +21,7 @@ test('board projection gives ready work an obvious primary action', () => {
 		const run = ledger.admit({ repositoryId: 'frostyard/clix', workItem }, principal, 'ready');
 		const card = projectRunForBoard(run);
 		assert.equal(card.lane, 'ready');
-		assert.equal(card.phase, 'ready to start');
+		assert.equal(card.phase, 'waiting on you');
 		assert.deepEqual(card.actions.map(({ kind }) => kind), ['go_fix', 'cancel']);
 	} finally { ledger.close(); }
 });
@@ -62,7 +62,7 @@ test('externally merged and closed pull requests become terminal history', () =>
 
 		const closed = projectRunForBoard(run, { ...publication, status: 'closed', pullMergedAt: undefined });
 		assert.equal(closed.lane, 'history');
-		assert.equal(closed.phase, 'closed without merge');
+		assert.equal(closed.phase, 'closed, not merged');
 		assert.deepEqual(closed.actions.map(({ kind }) => kind), ['refresh_checks', 'open_pull_request']);
 	} finally { ledger.close(); }
 });
@@ -80,7 +80,7 @@ test('stale-base recovery advances through explicit replay, review, and promotio
 			attemptCount: 0, checks: [], createdAt: '2026-09-03T10:01:00.000Z', updatedAt: '2026-09-03T10:01:00.000Z',
 		} satisfies DraftPublicationRecord;
 		const available = projectRunForBoard(run, publication);
-		assert.equal(available.phase, 'stale base'); assert.deepEqual(available.actions.map(({ kind }) => kind), ['replay_publication']);
+		assert.equal(available.phase, 'main moved on'); assert.deepEqual(available.actions.map(({ kind }) => kind), ['replay_publication']);
 
 		const rebase = {
 			id: '44444444-4444-4444-8444-444444444444', ownerId: principal.id, sourcePublicationId: publication.id,
@@ -95,7 +95,7 @@ test('stale-base recovery advances through explicit replay, review, and promotio
 		const pendingReplay = projectRunForBoard(run, publication, undefined, {
 			sourcePublicationId: publication.id, rebase: { ...rebase, status: 'pending' },
 		});
-		assert.equal(pendingReplay.phase, 'replay pending'); assert.equal(pendingReplay.actions[0]?.label, 'Resume replay');
+		assert.equal(pendingReplay.phase, 'rebuild waiting'); assert.equal(pendingReplay.actions[0]?.label, 'Resume the rebuild');
 		const replayed = projectRunForBoard(run, publication, undefined, { sourcePublicationId: publication.id, rebase });
 		assert.equal(replayed.lane, 'review'); assert.deepEqual(replayed.actions.map(({ kind }) => kind), ['review_publication_replay']);
 
@@ -111,7 +111,7 @@ test('stale-base recovery advances through explicit replay, review, and promotio
 			sourcePublicationId: publication.id, rebase,
 			review: { ...review, status: 'pending', modelCalls: 0, report: undefined, repositoryContextPath: undefined, conversationId: undefined, submissionId: undefined },
 		});
-		assert.equal(pendingReview.phase, 'fresh review pending'); assert.equal(pendingReview.actions[0]?.label, 'Resume fresh review');
+		assert.equal(pendingReview.phase, 'review starting'); assert.equal(pendingReview.actions[0]?.label, 'Resume the review');
 		const approved = projectRunForBoard(run, publication, undefined, { sourcePublicationId: publication.id, rebase, review });
 		assert.equal(approved.lane, 'delivery'); assert.deepEqual(approved.actions.map(({ kind }) => kind), ['promote_publication_replay']);
 
@@ -125,7 +125,7 @@ test('stale-base recovery advances through explicit replay, review, and promotio
 			},
 			supersedingCandidate: { publicationId: '77777777-7777-4777-8777-777777777777', pullNumber: 7, pullUrl: 'https://github.com/frostyard/frostyard-org/pull/7' },
 		});
-		assert.equal(resolved.lane, 'history'); assert.equal(resolved.phase, 'superseded by merged publication');
+		assert.equal(resolved.lane, 'history'); assert.equal(resolved.phase, 'shipped another way');
 		assert.equal(resolved.updatedAt, '2026-09-03T10:06:00.000Z');
 		assert.deepEqual(resolved.actions.map(({ kind }) => kind), ['open_pull_request']);
 	} finally { ledger.close(); }
@@ -151,7 +151,7 @@ test('multi-worker evidence controls active and exhausted board states without a
 		};
 		const active = projectRunForBoard(run, undefined, { ...base, status: 'active', summary: '2 workers active; 0/3 tasks succeeded.' });
 		assert.equal(active.lane, 'working');
-		assert.equal(active.phase, 'multi-worker fan-out');
+		assert.equal(active.phase, 'split across workers');
 		assert.equal(active.updatedAt, base.updatedAt);
 		assert.equal(active.metrics.activeWorkers, 2);
 		assert.equal(active.actions.length, 0);
@@ -161,13 +161,13 @@ test('multi-worker evidence controls active and exhausted board states without a
 			reasons: ['Subscription-call budget is exhausted for openai-codex'], updatedAt: '2026-09-03T03:02:00.000Z',
 		});
 		assert.equal(blocked.lane, 'attention');
-		assert.equal(blocked.phase, 'fan-out blocked');
+		assert.equal(blocked.phase, 'split stopped');
 		assert.match(blocked.attention ?? '', /Subscription-call budget/);
 		assert.equal(blocked.actions.length, 0);
 
 		const cancelledRun = ledger.cancel(run.id, { expectedVersion: run.version, reason: 'Stop the parent run.' }, principal);
 		const cancelled = projectRunForBoard(cancelledRun, undefined, { ...base, status: 'active', summary: 'Stale active evidence.' });
 		assert.equal(cancelled.lane, 'history');
-		assert.equal(cancelled.phase, 'cancelled');
+		assert.equal(cancelled.phase, 'dropped');
 	} finally { ledger.close(); }
 });

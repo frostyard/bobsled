@@ -20,7 +20,7 @@ Bobsled's current pipeline already provides the downstream controls that Chopin 
 - M4 supplies automatic independent review, bounded remediation, exact-patch draft publication, and durable evidence.
 - M5 now defines versioned dependency graphs and literal file or directory ownership scopes for prospective parallel work.
 
-Bobsled's current intake remains comparatively small: a GitHub issue, manual task, or fixture becomes a schema-validated work item and is sent through read-only triage. Chopin can improve the information entering that boundary without weakening the controls after it.
+Bobsled's current intake remains comparatively small: a GitHub issue or manual task becomes a schema-validated work item and is sent through read-only triage. Chopin can improve the information entering that boundary without weakening the controls after it.
 
 ## Responsibility boundary
 

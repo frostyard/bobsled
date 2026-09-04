@@ -2,7 +2,7 @@
 
 Bobsled's factory board is a read-only projection of durable control-plane state. Moving a card is an outcome of a typed ledger, review, or publication transition; operators cannot drag cards between lanes.
 
-Only admitted runs appear on the board. An issue or manual task that has not completed triage and admission is still intake, not `Ready`.
+Only admitted runs appear on the board. An issue or manual task that has not completed triage and admission is still intake, not `ready`.
 
 ## Evaluation precedence
 
@@ -19,76 +19,78 @@ The server evaluates the latest durable state in this order so a later or more u
 9. Historical review-recovery case
 10. Other blocked implementation
 
-For example, an approved review with a blocked publication belongs in `Attention`, not `Delivery`, because the publication record is the later state.
+For example, an approved review with a blocked publication belongs in `attention`, not `delivery`, because the publication record is the later state.
 
 ## Lanes
 
-### Ready
+Lane ids are the contract and never change. The names below are what the interface shows; `src/control-plane/ui/copy.ts` is the single place they are defined.
 
-A card is `Ready` when:
+### Ready (lane id `ready`)
+
+A card is in `ready` when:
 
 - the work has been admitted into the durable ledger;
 - its run status is `pending`;
 - no implementation attempt, review, or publication has a later state that takes precedence.
 
-The primary action is **Go fix this**. That authorization covers one bounded implementation attempt and automatic adversarial review/remediation for any successful changed patch.
+The primary action is **Start work**. That authorization covers one bounded implementation attempt and automatic adversarial review/remediation for any successful changed patch.
 
-### Working
+### Working (lane id `working`)
 
-A card is `Working` when no publication or review takes precedence and either:
+A card is in `working` when no publication or review takes precedence and either:
 
 - the run status is `active`; or
 - its latest implementation attempt is `queued` or `running`.
 
 This includes repository preparation, the implementation worker, and trusted implementation quality gates. It does not include adversarial review.
 
-A linked multi-worker plan also places the card in `Working` while it is planned, waiting, active, or complete-but-awaiting integration. Later review and publication evidence still takes precedence, as do a cancelled or failed parent run.
+A linked multi-worker plan also places the card in `working` while it is planned, waiting, active, or complete-but-awaiting integration. Later review and publication evidence still takes precedence, as do a cancelled or failed parent run.
 
-A stale-base recovery is also `Working` while the zero-model exact-patch replay is pending or running.
+A stale-base rebuild is also `working` while the zero-model exact-patch replay is pending or running.
 
-### Review
+### Checking (lane id `review`)
 
-A card is `Review` when there is no publication record and its latest adversarial review is `queued` or `running`.
+A card is in `review` when there is no publication record and its latest adversarial review is `queued` or `running`.
 
-The lane covers the initial independent review, the single policy-permitted remediation round, trusted post-remediation gates, and any fresh final review. These steps are automatic, so the card normally has no mutation action; **Details** exposes progress and evidence.
+The lane covers the initial independent review, the single policy-permitted remediation round, trusted post-remediation gates, and any fresh final review. These steps are automatic, so the card normally has no mutation action; the run page exposes progress and evidence, and **Watch it work** streams it live.
 
-A validated stale-base replay enters `Review` with **Run fresh review**. Once authorized, its one fresh Copilot review remains in this lane until it settles; a model-bearing result cannot be retried.
+A validated stale-base rebuild enters `review` with **Review it again**. Once authorized, its one fresh Copilot review remains in this lane until it settles; a model-bearing result cannot be retried.
 
-### Delivery
+### Shipping (lane id `delivery`)
 
-A card is `Delivery` when either:
+A card is in `delivery` when either:
 
 - its latest review is `approved` and no publication record exists yet; or
 - its publication is `pending`, `running`, `published`, `checks_pending`, or `ready_for_human`.
 
-Depending on the exact phase, the card may offer **Prepare draft PR**, **Publish draft PR**, **Refresh status**, or **Open draft PR**. **Refresh status** first verifies the recorded pull request's immutable number, URL, branch, commit, base, and Bobsled marker, then reconciles its open/closed/merged lifecycle and required checks. `ready_for_human` means Bobsled's required checks passed; Bobsled still cannot merge.
+Depending on the exact phase, the card may offer **Prepare draft PR**, **Open it on GitHub**, **Check again**, or **Open the draft PR**. **Check again** first verifies the recorded pull request's immutable number, URL, branch, commit, base, and Bobsled marker, then reconciles its open/closed/merged lifecycle and required checks. `ready_for_human` means Bobsled's required checks passed; Bobsled still cannot merge.
 
-An approved stale-base review enters `Delivery` with **Prepare recovered draft PR**. That action creates a new immutable pending publication linked to the original blocked publication; **Publish draft PR** remains a separate explicit action.
+An approved stale-base review enters `delivery` with **Prepare draft PR**. That action creates a new immutable pending publication linked to the original blocked publication; **Open it on GitHub** remains a separate explicit action.
 
-### Attention
+### Needs you (lane id `attention`)
 
-A card is `Attention` when a human decision or recovery path is required. Qualifying states are:
+A card is in `attention` when a human decision or recovery path is required. Qualifying states are:
 
 - run status `failed`;
 - publication `blocked`, `failed`, or `checks_failed`;
-- a stale-base publication awaiting **Replay on current base**, or a replay/review that blocked with retained evidence;
+- a stale-base publication awaiting **Rebuild on latest main**, or a rebuild/review that stopped with retained evidence;
 - review `blocked` or `failed`;
 - pre-execution policy block with no implementation attempt (awaiting human approval);
 - a successful historical patch with no review record (review recovery);
 - any other blocked implementation attempt.
 - a linked multi-worker plan whose dependency chain, attempt allowance, provider-call allowance, or wall-clock budget is terminally exhausted.
 
-The card exposes only a valid recovery action. A permanent policy block has **Details** instead of a retry button that would repeat known-futile work.
+The card exposes only a valid recovery action. A permanent policy block links to the run page instead of a retry button that would repeat known-futile work.
 
-### History
+### Done (lane id `history`)
 
-A publication enters `History` after GitHub reports that its exact recorded pull request was merged or closed without merge. A merged record is terminal and exposes only **Open pull request**. A closed-without-merge record retains **Refresh status**, because GitHub permits reopening; if reopened, its latest check state places it back in `Delivery` or `Attention`.
+A publication enters `history` after GitHub reports that its exact recorded pull request was merged or closed without merge. A merged record is terminal and exposes only **Open the PR**. A closed-without-merge record retains **Check again**, because GitHub permits reopening; if reopened, its latest check state places it back in `delivery` or `attention`.
 
-A side-effect-free stale publication may also enter `History` through an immutable **Mark superseded by merged PR** decision after its zero-model replay retains an exact patch conflict and a later merged publication matches the repository and task title. The old publication and replay stay unchanged; the resolution performs no model call or GitHub mutation and links the later merged pull request.
+A side-effect-free stale publication may also enter `history` through an immutable **Already shipped another way** decision after its zero-model replay retains an exact patch conflict and a later merged publication matches the repository and task title. The old publication and replay stay unchanged; the resolution performs no model call or GitHub mutation and links the later merged pull request.
 
 ## Multi-worker evidence
 
-When a run has an immutable multi-worker plan, its card and drawer show:
+When a run has an immutable multi-worker plan, its card and run page show:
 
 - active workers and completed tasks;
 - workspace attempts used versus the snapshotted maximum;
@@ -100,9 +102,9 @@ When a run has an immutable multi-worker plan, its card and drawer show:
 
 This is a read-only projection. Loading or refreshing the board never invokes the scheduler, creates a workspace, reserves capacity, consumes a subscription call, or grants retry authority.
 
-### History
+### Done, continued
 
-A card is placed in collapsed `History` when:
+A card is also placed in collapsed `history` when:
 
 - the run was cancelled; or
 - trusted evidence settled it as `no_change`/zero changed files.
@@ -114,3 +116,19 @@ Cancelled work may be superseded. Verified no-change work is terminal: it has no
 The browser periodically reloads the typed board projection while any implementation, review, publication, or check is active. Search and repository filters change visibility only; they never change lane membership or workflow state.
 
 The implementation of these predicates is `src/control-plane/operator-board-view.ts`. Its output is schema-validated before the browser receives it.
+
+## Where the interface lives
+
+`src/control-plane/ui/` renders the whole operator interface as one document:
+
+- `copy.ts` — every display string that is not produced by this projection: lane names and definitions, the two columns of each authorization sheet, brief field labels. Lane ids never change; only these names do.
+- `theme.ts` — design tokens and component styles. Type is split by role: sans for the interface, mono only for values that are exact (digests, SHAs, run ids, paths, gate names). The lane colours are the status palette, used everywhere state is shown; the accent means "primary action" and nothing else.
+- `client/` — one module per screen, plus the shared runtime in `core.ts` (data access, navigation, toasts, and the authorization sheet).
+
+`test/ui-client.test.ts` boots that script against a small DOM and asserts the board renders, empty lanes explain themselves, and no durable action fires before its authorization is confirmed.
+
+## Watching a run
+
+A card in `working` or `review` offers **Watch it work**, which opens `/runs/:id/live`. That screen streams the Flue observations already recorded for the run's own implementation, review, and remediation workers, read through `GET /api/runs/:runId/activity`.
+
+It is read-only by design. One attempt, one review, one remediation round, and a patch digest binding an approval to exact bytes all assume nobody reached into a running attempt. There is no way to steer an agent mid-run and there should not be one; the only control on the screen is **Stop**, and changing the outcome means stopping and rewriting the task.

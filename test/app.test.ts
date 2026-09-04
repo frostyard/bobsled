@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import app from '../src/app.ts';
 import { operatorAuthConfiguration } from '../src/control-plane/operator-auth.ts';
 import { operatorSessionStore } from '../src/control-plane/operator-sessions.ts';
-import { controlPlaneHtml } from '../src/control-plane/ui.ts';
+import { controlPlaneHtml } from '../src/control-plane/ui/index.ts';
 
 const authEnvironmentKeys = [
 	'BOBSLED_OPERATOR_AUTH_MODE', 'BOBSLED_GITHUB_CLIENT_ID', 'BOBSLED_GITHUB_CLIENT_SECRET',
@@ -51,52 +52,71 @@ test('lists only enrolled repositories and exposes their bounded policies', asyn
 	assert.equal(website?.capabilities.writeGitHub, true);
 });
 
-test('serves clix dry-run fixtures and rejects unenrolled repositories', async () => {
-	const fixtures = await app.request('/api/repositories/frostyard/clix/fixtures');
-	assert.equal(fixtures.status, 200);
-	assert.equal((await fixtures.json() as unknown[]).length, 2);
-
-	const missing = await app.request('/api/repositories/frostyard/not-enrolled/fixtures');
-	assert.equal(missing.status, 404);
-	const bobsled = await app.request('/api/repositories/frostyard/bobsled/fixtures');
-	assert.equal(bobsled.status, 200);
-	assert.deepEqual(await bobsled.json(), []);
-});
-
-test('serves the local factory interface', async () => {
+test('serves the operator interface', async () => {
 	const response = await app.request('/');
 	assert.equal(response.status, 200);
 	const html = await response.text();
-	assert.match(html, /BOB<span>SLED/);
-	assert.match(html, /Trusted local<\/span><strong>Local operator/);
-	assert.match(html, /Trusted final evidence/);
-	assert.match(html, /Next safe action:/);
-	assert.match(html, /Revise task from findings/);
-	assert.match(html, /NEW TRIAGE DECISION · NOT YET ADMITTED/);
-	assert.match(html, /Admit for human approval/);
-	assert.match(html, /RUN ADMITTED · AWAITING HUMAN APPROVAL/);
-	assert.match(html, /Factory board/);
-	assert.match(html, /Conversational intake/);
-	assert.match(html, /Live structured brief/);
-	assert.match(html, /Revise brief once/);
-	assert.match(html, /Finalize brief/);
-	assert.match(html, /Start correction/);
-	assert.match(html, /Run independent triage/);
-	assert.match(html, /Admit triaged run/);
-	assert.match(html, /How lane assignment works/);
-	assert.match(html, /Admitted run is pending authorization/);
-	assert.match(html, /data-lane="attention"/);
-	assert.match(html, /function openDrawer/);
-	assert.match(html, /Audit timeline/);
+	assert.match(html, /BOB<i>SLED/);
+	assert.match(html, /Signed in as/);
+	// Lane names the operator reads, not the lane ids the contract uses.
+	assert.match(html, /Needs you/);
+	assert.match(html, /Waiting for you to say go/);
+	assert.match(html, /Codex is writing code/);
+	// The authorization sheet replaces every window.prompt.
+	assert.doesNotMatch(html, /window\.prompt/);
+	assert.match(html, /What this lets it do/);
+	assert.match(html, /What it still cannot do/);
+	assert.match(html, /Start work on this\?/);
+	// Watching is deliberately read-only.
+	assert.match(html, /You are watching, not steering/);
+	assert.match(html, /What we have agreed/);
 	const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)?.[1];
 	assert.ok(script, 'expected the control-plane module script');
 	assert.doesNotThrow(() => new vm.Script(`(async () => {${script}})()`));
 });
 
-test('escapes server-rendered operator identity', () => {
-	const html = controlPlaneHtml({ provider: 'github', login: '<operator&admin>' });
-	assert.match(html, /@&lt;operator&amp;admin&gt;/);
-	assert.doesNotMatch(html, /@<operator&admin>/);
+test('serves every operator surface as one document and 404s anything else', async () => {
+	for (const path of ['/', '/intake', '/activity', '/access', '/change-sets', '/runs/9c41b7e2-0000-4000-8000-000000000000', '/runs/9c41b7e2-0000-4000-8000-000000000000/live']) {
+		const response = await app.request(path);
+		assert.equal(response.status, 200, path);
+		assert.match(await response.text(), /<title>Bobsled<\/title>/, path);
+	}
+	assert.equal((await app.request('/not-a-surface')).status, 404);
+});
+
+test('never lets an operator login break out of the client module', () => {
+	const html = controlPlaneHtml({ provider: 'github', login: '</script><img src=x onerror=alert(1)>' });
+	assert.doesNotMatch(html, /<\/script><img/);
+	assert.match(html, /\\u003c\/script>/);
+});
+
+test('exposes read-only live agent activity for a run and nothing for an unknown one', async () => {
+	const admitted = await app.request('/api/runs', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', 'idempotency-key': `activity-${randomUUID()}` },
+		body: JSON.stringify({
+			repositoryId: 'frostyard/clix',
+			workItem: { source: 'manual', key: 'manual:activity', title: 'Watchable work', body: 'Body.', labels: [] },
+			triageDecision: {
+				route: 'ready_for_agent', risk: 'low', confidence: 0.9,
+				summary: 'Small change.', rationale: 'Explicit and bounded.',
+				acceptanceCriteria: ['It works'], missingInformation: [],
+				suggestedLabels: ['bobsled:ready'], eligibleForOneClick: true,
+			},
+		}),
+	});
+	assert.equal(admitted.status, 201);
+	const run = await admitted.json() as { id: string };
+
+	const activity = await app.request(`/api/runs/${run.id}/activity`);
+	assert.equal(activity.status, 200);
+	const payload = await activity.json() as { runId: string; events: unknown[] };
+	assert.equal(payload.runId, run.id);
+	// Nothing has run yet, so there is nothing to watch -- but the route must
+	// answer rather than fail, and it must never start anything.
+	assert.deepEqual(payload.events, []);
+	assert.equal((await app.request(`/api/runs/${run.id}`)).status, 200);
+	assert.equal((await app.request('/api/runs/00000000-0000-4000-8000-000000000000/activity')).status, 404);
 });
 
 test('serves a typed operator board projection', async () => {
@@ -250,9 +270,11 @@ test('authenticated principals reach protected routes and mutations enforce orig
 		const page = await app.request('https://factory.example/', { headers });
 		assert.equal(page.status, 200);
 		const html = await page.text();
-		assert.match(html, /GitHub<\/span><strong>@operator/);
-		assert.doesNotMatch(html, /github:999|member/);
-		assert.match(html, /id="authority-status"/);
+		// Only the display label reaches the page; the principal id and its
+		// organisation membership stay on the server.
+		assert.match(html, /"provider":"github","label":"@operator"/);
+		assert.doesNotMatch(html, /github:999/);
+		assert.doesNotMatch(html, /membership/);
 		assert.equal((await app.request('https://factory.example/api/runs', { headers })).status, 200);
 		assert.equal((await app.request('https://factory.example/api/github-app/authority', { headers })).status, 200);
 		assert.equal((await app.request('https://factory.example/api/runs', { method: 'POST', headers })).status, 403);
