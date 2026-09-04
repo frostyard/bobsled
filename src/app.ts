@@ -27,6 +27,8 @@ import {
 } from './control-plane/ledger.ts';
 import { getRepository, repositories } from './control-plane/repositories.ts';
 import { repositoryDriftService } from './control-plane/repository-drift.ts';
+import { repositoryEnrollmentService, RepositoryEnrollmentPolicyError, RepositoryEnrollmentUpstreamError } from './control-plane/repository-enrollment-service.ts';
+import { RepositoryEnrollmentConflictError, RepositoryEnrollmentIntegrityError } from './control-plane/repository-enrollment-store.ts';
 import { triageWorkItem } from './control-plane/triage-service.ts';
 import { IntakeConversationConflictError, IntakeConversationForbiddenError, IntakeConversationNotFoundError, IntakeConversationStore } from './control-plane/intake-conversation-store.ts';
 import { IntakeConversationRevisionConflictError, IntakeConversationRevisionForbiddenError, IntakeConversationRevisionNotFoundError, IntakeConversationRevisionStore } from './control-plane/intake-conversation-revision-store.ts';
@@ -173,6 +175,16 @@ function publicationRecoveryError(context: Parameters<Parameters<typeof app.onEr
 	return context.json({ error: message }, 400);
 }
 
+function repositoryEnrollmentError(context: Parameters<Parameters<typeof app.onError>[0]>[1], error: unknown) {
+	const message = error instanceof Error ? error.message : 'Repository enrollment failed';
+	if (error instanceof RepositoryEnrollmentConflictError) return context.json({ error: message }, 409);
+	if (error instanceof RepositoryEnrollmentPolicyError) return context.json({ error: message }, 422);
+	if (error instanceof RepositoryEnrollmentUpstreamError) return context.json({ error: message }, 502);
+	if (error instanceof RepositoryEnrollmentIntegrityError) return context.json({ error: message }, 503);
+	if (error instanceof GitHubInstallationConfigurationError) return context.json({ error: message }, 503);
+	return context.json({ error: message }, 400);
+}
+
 app.route('/agents/bobsled', createAgentRouter(Bobsled));
 app.route('/agents/codex', createAgentRouter(CodexAgent));
 app.route('/agents/copilot', createAgentRouter(CopilotAgent));
@@ -207,9 +219,22 @@ app.get('/change-sets', (context) => context.html(operatorInterfaceHtml(context.
 app.get('/runs/:runId', (context) => context.html(operatorInterfaceHtml(context.get('principal'))));
 app.get('/runs/:runId/live', (context) => context.html(operatorInterfaceHtml(context.get('principal'))));
 
-app.get('/api/repositories', (context) => context.json(repositories));
+app.get('/api/repositories', (context) => context.json(repositories.filter(({ enabled }) => enabled)));
 
 app.get('/api/repositories/drift', async (context) => context.json(await repositoryDriftService.inspectAll()));
+app.get('/api/repository-enrollments', (context) => context.json(repositoryEnrollmentService.list()));
+app.get('/api/repository-enrollments/discover', async (context) => {
+	try { return context.json(await repositoryEnrollmentService.discover()); }
+	catch (error) { return repositoryEnrollmentError(context, error); }
+});
+app.post('/api/repository-enrollments', async (context) => {
+	try { return context.json(await repositoryEnrollmentService.enroll(await context.req.json(), context.get('principal'), context.req.header('idempotency-key') ?? ''), 201); }
+	catch (error) { return repositoryEnrollmentError(context, error); }
+});
+app.post('/api/repository-enrollments/:owner/:repository/disable', async (context) => {
+	try { return context.json(repositoryEnrollmentService.disable({ ...await context.req.json(), repositoryId: `${context.req.param('owner')}/${context.req.param('repository')}` }, context.get('principal'), context.req.header('idempotency-key') ?? '')); }
+	catch (error) { return repositoryEnrollmentError(context, error); }
+});
 app.get('/api/github-app/status', (context) => context.json({ ...githubAppStatus(), webhooks: githubEventStore.metrics() }));
 app.get('/api/github-app/authority', (context) => context.json(auditGitHubPermissions(githubEventStore.latestInstallationSnapshot())));
 app.get('/api/operator-auth/status', (context) => context.json(operatorAuthStatus()));
@@ -559,7 +584,7 @@ app.get('/health', (context) =>
 	context.json({
 		ok: true,
 		agents: ['bobsled', 'codex', 'copilot', 'triage', 'intake-brief-revision', 'intake-snapshot-triage', 'implementation-worker', 'integration-worker', 'integration-conflict-worker', 'adversarial-reviewer', 'remediation-worker'],
-		repositories: repositories.map(({ id, readOnly }) => ({ id, readOnly })),
+		repositories: repositories.filter(({ enabled }) => enabled).map(({ id, readOnly }) => ({ id, readOnly })),
 		githubApp: githubAppStatus(),
 		operatorAuth: operatorAuthStatus(),
 		observability: flueObservationStore.metrics(),

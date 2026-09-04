@@ -52,6 +52,20 @@ test('lists only enrolled repositories and exposes their bounded policies', asyn
 	assert.equal(website?.capabilities.writeGitHub, true);
 });
 
+test('lists bounded durable repository enrollment state', async () => {
+	const response = await app.request('/api/repository-enrollments');
+	assert.equal(response.status, 200);
+	const records = await response.json() as Array<Record<string, unknown> & { repository: Record<string, unknown> }>;
+	assert.equal(records.length, 3);
+	for (const record of records) {
+		assert.equal(record.version, 1);
+		assert.equal(record.action, 'bootstrap');
+		assert.equal('actorId' in record, false);
+		assert.equal('reason' in record, false);
+		assert.equal('githubRepositoryId' in record.repository, false);
+	}
+});
+
 test('reports bounded repository drift without exposing installation authority', async () => {
 	const response = await app.request('/api/repositories/drift');
 	assert.equal(response.status, 200);

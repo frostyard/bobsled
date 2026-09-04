@@ -61,6 +61,24 @@ export interface AuthorityCopy {
 }
 
 export const AUTHORITY: Record<string, AuthorityCopy> = {
+	enroll_repository: {
+		title: 'Enroll this repository?', confirm: 'Enroll repository',
+		grants: ['Import the versioned .bobsled/repository.json policy', 'Make the repository available according to that policy'],
+		denies: ['Start work, spend a model call, or write to GitHub', 'Grant anything not declared by the repository policy', 'Merge or deploy'],
+		placeholder: 'Why this repository belongs in Bobsled.',
+	},
+	enable_repository: {
+		title: 'Enable this repository?', confirm: 'Enable repository',
+		grants: ['Re-read the current GitHub identity and repository-owned policy', 'Allow new work only under the newly recorded policy version'],
+		denies: ['Restore stale policy authority', 'Start work, spend a model call, or write to GitHub', 'Merge or deploy'],
+		placeholder: 'Why new work may resume.',
+	},
+	disable_repository: {
+		title: 'Disable this repository?', confirm: 'Disable repository',
+		grants: ['Block new intake and authority for this repository', 'Keep all existing history and policy versions'],
+		denies: ['Delete evidence or close GitHub work', 'Cancel already-running external side effects', 'Remove the GitHub App installation'],
+		placeholder: 'Why new work should stop.',
+	},
 	go_fix: {
 		title: 'Start work on this?',
 		confirm: 'Start work',

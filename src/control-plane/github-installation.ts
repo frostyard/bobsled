@@ -1,6 +1,7 @@
 import { createAppAuth, type InstallationAccessTokenAuthentication } from '@octokit/auth-app';
 import { resolveGitHubPrivateKey, type PrivateKeyReader } from './github-app.ts';
 import { getRepository } from './repositories.ts';
+import { REQUIRED_GITHUB_ORGANIZATION } from './operator-auth.ts';
 
 const permissionProfiles = {
 	repository_metadata_read: { metadata: 'read' },
@@ -152,6 +153,54 @@ export class GitHubInstallationAuthority {
 		} finally {
 			active = false;
 		}
+	}
+
+	async withInstallationRequest<T>(
+		capability: 'repository_metadata_read',
+		use: (authority: ScopedInstallationAuthority) => Promise<T>,
+	): Promise<T> {
+		return this.#withScopedRequest(REQUIRED_GITHUB_ORGANIZATION, 0, capability, undefined, use);
+	}
+
+	async withCandidateRequest<T>(
+		repositoryName: string,
+		repositoryId: number,
+		capability: 'repository_contents_read',
+		use: (authority: ScopedInstallationAuthority) => Promise<T>,
+	): Promise<T> {
+		if (!repositoryName.toLowerCase().startsWith(`${REQUIRED_GITHUB_ORGANIZATION}/`) || !Number.isSafeInteger(repositoryId) || repositoryId < 1) {
+			throw new GitHubInstallationScopeError('Enrollment candidate is outside the configured organization');
+		}
+		return this.#withScopedRequest(repositoryName, repositoryId, capability, [repositoryId], use);
+	}
+
+	async #withScopedRequest<T>(
+		repositoryName: string,
+		repositoryId: number,
+		capability: GitHubInstallationCapability,
+		repositoryIds: number[] | undefined,
+		use: (authority: ScopedInstallationAuthority) => Promise<T>,
+	): Promise<T> {
+		const appId = positiveInteger(this.#environment.BOBSLED_GITHUB_APP_ID);
+		const installationId = positiveInteger(this.#environment.BOBSLED_GITHUB_INSTALLATION_ID);
+		const privateKey = resolveGitHubPrivateKey(this.#environment, this.#readPrivateKey);
+		if (!appId || !installationId || !privateKey) throw new GitHubInstallationConfigurationError('GitHub App installation authority is not configured');
+		const permissions = permissionProfiles[capability];
+		const auth = this.#createAuth({ appId, privateKey });
+		const authentication = await auth({ type: 'installation', installationId, ...(repositoryIds ? { repositoryIds } : {}), permissions }) as InstallationAccessTokenAuthentication;
+		let active = true;
+		const scoped: ScopedInstallationAuthority = {
+			repository: repositoryName, repositoryId, capability, expiresAt: authentication.expiresAt, permissions: authentication.permissions,
+			request: async (path, init = {}) => {
+				if (!active) throw new GitHubInstallationScopeError('Scoped GitHub authority has expired');
+				if (!path.startsWith('/') || path.startsWith('//')) throw new GitHubInstallationScopeError('GitHub request path is outside the API origin');
+				const headers = new Headers(init.headers);
+				headers.set('accept', 'application/vnd.github+json'); headers.set('authorization', `Bearer ${authentication.token}`);
+				headers.set('x-github-api-version', '2026-03-10'); headers.set('user-agent', 'bobsled-control-plane');
+				return this.#fetch(`https://api.github.com${path}`, { ...init, headers });
+			},
+		};
+		try { return await use(scoped); } finally { active = false; }
 	}
 }
 
