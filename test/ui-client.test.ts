@@ -291,6 +291,28 @@ test('confirming sends the reason the operator typed', async () => {
 	assert.equal((executed.body as { expectedVersion: number }).expectedVersion, 3);
 });
 
+test('archiving a terminal card is explicit and posts the optimistic run version', async () => {
+	const archived = card({
+		lane: 'attention', phase: 'review said no',
+		actions: [{ kind: 'archive', label: 'Archive', emphasis: 'secondary' }],
+		run: { ...card().run, status: 'blocked', version: 7 },
+	});
+	const harness = await boot({
+		'/api/repositories': repositories,
+		'/api/operator-board': { generatedAt: new Date().toISOString(), cards: [archived] },
+		'POST /api/runs/11111111-1111-4111-8111-111111111111/archive': { ...archived.run, version: 8 },
+	});
+	harness.document.querySelectorAll('.card .btn').find((node) => node.textContent === 'Archive')!.dispatch('click');
+	await harness.flush();
+	assert.equal(harness.calls.filter(({ url }) => url.endsWith('/archive')).length, 0, 'archive must wait for explicit confirmation');
+	const sheet = harness.sheet()!;
+	assert.ok(sheet.textContent.includes('Stop browser notifications for this run'));
+	sheet.querySelectorAll('.btn').find((node) => node.textContent === 'Archive it')!.dispatch('click');
+	await harness.flush();
+	const request = harness.calls.find(({ url }) => url.endsWith('/archive'))!;
+	assert.deepEqual(request.body, { reason: 'Archive this run — no note given.', expectedVersion: 7 });
+});
+
 test('an unknown address explains itself instead of rendering an empty board', async () => {
 	const harness = await boot({ '/api/repositories': repositories }, '/nonsense');
 	assert.ok(harness.document.textContent.includes('There is nothing at this address.'));

@@ -106,6 +106,53 @@ test('cancelled work can be superseded without rewriting history', () => {
 	}
 });
 
+test('terminal runs can be archived and restored without rewriting workflow evidence', () => {
+	let tick = 0;
+	const store = new JobLedger(':memory:', () => new Date(`2026-09-01T12:00:0${tick++}.000Z`));
+	try {
+		const blocked = store.admit({ repositoryId: 'frostyard/clix', workItem, triageDecision: needsSpec }, principal, 'archive-blocked');
+		assert.throws(
+			() => store.archive(blocked.id, { expectedVersion: blocked.version + 1, reason: 'Retire noisy test evidence.' }, principal),
+			LedgerConflictError,
+		);
+		const archived = store.archive(blocked.id, { expectedVersion: blocked.version, reason: 'Retire noisy test evidence.' }, principal);
+		assert.equal(archived.status, 'blocked');
+		assert.equal(archived.jobs[0]?.status, 'blocked');
+		assert.deepEqual(archived.archive, {
+			actorId: principal.id,
+			reason: 'Retire noisy test evidence.',
+			archivedAt: '2026-09-01T12:00:01.000Z',
+		});
+		assert.equal(archived.audit.at(-1)?.type, 'run.archived');
+		assert.equal(store.archive(blocked.id, { expectedVersion: blocked.version, reason: 'A replay.' }, principal).version, archived.version);
+
+		const restored = store.restore(blocked.id, { expectedVersion: archived.version, reason: 'Needs attention again.' }, principal);
+		assert.equal(restored.archive, undefined);
+		assert.equal(restored.status, 'blocked');
+		assert.equal(restored.audit.at(-1)?.type, 'run.restored');
+		assert.equal(store.restore(blocked.id, { expectedVersion: archived.version, reason: 'A replay.' }, principal).version, restored.version);
+	} finally {
+		store.close();
+	}
+});
+
+test('active or pending runs cannot be hidden by the archive overlay', () => {
+	const store = ledger();
+	try {
+		const pending = store.admit({ repositoryId: 'frostyard/clix', workItem }, principal, 'archive-active');
+		assert.throws(
+			() => store.archive(pending.id, { expectedVersion: pending.version, reason: 'Hide active work.' }, principal),
+			LedgerConflictError,
+		);
+		assert.throws(
+			() => store.archive(pending.id, { expectedVersion: pending.version, reason: 'Cross-principal attempt.' }, otherPrincipal),
+			LedgerForbiddenError,
+		);
+	} finally {
+		store.close();
+	}
+});
+
 test('an executed blocked run can be superseded with a fresh policy snapshot', () => {
 	const store = ledger();
 	try {

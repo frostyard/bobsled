@@ -4,10 +4,12 @@ import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import * as v from 'valibot';
 import {
+	ArchiveRunRequestSchema,
 	AdmitRunRequestSchema,
 	CancelRunRequestSchema,
 	HumanOverrideRequestSchema,
 	RunRecordSchema,
+	RestoreRunRequestSchema,
 	type RunRecord,
 } from './ledger-contracts.ts';
 import {
@@ -241,10 +243,21 @@ export class JobLedger {
 		const reviews = this.#db.prepare('SELECT reviews.* FROM reviews JOIN jobs ON jobs.id = reviews.job_id WHERE jobs.run_id = ? ORDER BY reviews.number').all(runId) as Array<Record<string, unknown>>;
 		const approvals = this.#db.prepare('SELECT * FROM approvals WHERE run_id = ? ORDER BY created_at, id').all(runId) as Array<Record<string, unknown>>;
 		const audit = this.#db.prepare('SELECT * FROM audit_events WHERE run_id = ? ORDER BY sequence').all(runId) as Array<Record<string, unknown>>;
+		let archive: { actorId: string; reason: string; archivedAt: string } | undefined;
+		for (let index = audit.length - 1; index >= 0; index -= 1) {
+			const event = audit[index]!;
+			if (event.type === 'run.restored') break;
+			if (event.type !== 'run.archived') continue;
+			const payload = JSON.parse(event.payload_json as string) as Record<string, unknown>;
+			if (typeof payload.reason !== 'string' || payload.reason.length === 0) throw new LedgerConflictError('Stored run archive evidence is malformed');
+			archive = { actorId: String(event.actor_id), reason: payload.reason, archivedAt: String(event.created_at) };
+			break;
+		}
 		return v.parse(RunRecordSchema, {
 			id: run.id,
 			ownerId: run.owner_id,
 			status: run.status,
+			archive,
 			supersedesRunId: run.supersedes_run_id ?? undefined,
 			version: run.version,
 			createdAt: run.created_at,
@@ -485,6 +498,46 @@ export class JobLedger {
 			this.#audit(runId, undefined, principal.id, 'run.cancelled', { reason: request.reason }, timestamp);
 			return this.get(runId, principal);
 		})();
+	}
+
+	archive(runId: string, input: unknown, principal: Principal): RunRecord {
+		const request = v.parse(ArchiveRunRequestSchema, input);
+		return this.#db.transaction(() => {
+			const current = this.get(runId, principal);
+			if (current.archive) return current;
+			if (current.version !== request.expectedVersion) throw new LedgerConflictError('Run changed; reload before archiving');
+			if (!['blocked', 'succeeded', 'failed', 'cancelled'].includes(current.status)) throw new LedgerConflictError('Only terminal runs may be archived');
+			if (current.jobs.some((job) => job.attempts.some(({ status }) => status === 'queued' || status === 'running')
+				|| job.reviews.some(({ status }) => status === 'queued' || status === 'running'))) {
+				throw new LedgerConflictError('A run with active work or review may not be archived');
+			}
+			this.#assertNotMultiRepositoryMember(runId, 'archive');
+			const timestamp = this.#now().toISOString();
+			const changed = this.#db.prepare('UPDATE runs SET version = version + 1, updated_at = ? WHERE id = ? AND version = ?')
+				.run(timestamp, runId, request.expectedVersion);
+			if (changed.changes !== 1) throw new LedgerConflictError('Run changed; reload before archiving');
+			this.#audit(runId, undefined, principal.id, 'run.archived', { reason: request.reason }, timestamp);
+			return this.get(runId, principal);
+		}).immediate();
+	}
+
+	restore(runId: string, input: unknown, principal: Principal): RunRecord {
+		const request = v.parse(RestoreRunRequestSchema, input);
+		return this.#db.transaction(() => {
+			const current = this.get(runId, principal);
+			if (!current.archive) {
+				if (current.audit.some(({ type }) => type === 'run.restored')) return current;
+				throw new LedgerConflictError('Run is not archived');
+			}
+			if (current.version !== request.expectedVersion) throw new LedgerConflictError('Run changed; reload before restoring');
+			this.#assertNotMultiRepositoryMember(runId, 'restore');
+			const timestamp = this.#now().toISOString();
+			const changed = this.#db.prepare('UPDATE runs SET version = version + 1, updated_at = ? WHERE id = ? AND version = ?')
+				.run(timestamp, runId, request.expectedVersion);
+			if (changed.changes !== 1) throw new LedgerConflictError('Run changed; reload before restoring');
+			this.#audit(runId, undefined, principal.id, 'run.restored', { reason: request.reason }, timestamp);
+			return this.get(runId, principal);
+		}).immediate();
 	}
 
 	#ownedRun(runId: string, principal: Principal): OwnedRunRow {

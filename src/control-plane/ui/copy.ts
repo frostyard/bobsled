@@ -109,6 +109,33 @@ export const AUTHORITY: Record<string, AuthorityCopy> = {
 		placeholder: 'Why you are dropping it.',
 		note: 'You can start a fresh run from the same task afterwards.',
 	},
+	archive: {
+		title: 'Archive this run?',
+		confirm: 'Archive it',
+		grants: [
+			'Move this terminal run out of Needs you and into Done',
+			'Stop browser notifications for this run',
+			'Keep every task, attempt, review, artifact, and publication unchanged',
+		],
+		denies: [
+			'Delete or rewrite any evidence',
+			'Cancel active work, touch GitHub, or spend a model call',
+		],
+		placeholder: 'Optional. Why this no longer needs your attention.',
+		note: 'You can restore it later from Done.',
+	},
+	restore: {
+		title: 'Restore this run to the board?',
+		confirm: 'Restore it',
+		grants: [
+			'Remove the archive overlay and show the run in its current workflow lane',
+		],
+		denies: [
+			'Restart work, retry a model call, or change any evidence',
+			'Touch GitHub',
+		],
+		placeholder: 'Optional. Why this needs attention again.',
+	},
 	supersede: {
 		title: 'Try again with changes?',
 		confirm: 'Queue a new run',

@@ -9,7 +9,7 @@ import { getRepository } from './repositories.ts';
 
 export const OperatorBoardLaneSchema = v.picklist(['ready', 'working', 'review', 'delivery', 'attention', 'history']);
 export const OperatorBoardActionKindSchema = v.picklist([
-	'go_fix', 'human_override', 'cancel', 'supersede', 'manual_review', 'revise_task',
+	'go_fix', 'human_override', 'cancel', 'archive', 'restore', 'supersede', 'manual_review', 'revise_task',
 	'prepare_publication', 'publish_publication', 'refresh_checks', 'open_pull_request',
 	'replay_publication', 'review_publication_replay', 'promote_publication_replay',
 	'resolve_publication_supersession',
@@ -131,7 +131,10 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 	let attention: string | undefined;
 	let actions: OperatorBoardAction[] = [];
 
-	if (run.status === 'cancelled') {
+	if (run.archive) {
+		lane = 'history'; phase = 'archived'; summary = 'You archived this run. Everything it produced is still here, but it will not ask for attention or send notifications.';
+		actions = [action('restore', 'Restore to the board'), ...(publication?.pullUrl ? [action('open_pull_request', 'Open the PR', 'secondary', publication.pullUrl)] : [])];
+	} else if (run.status === 'cancelled') {
 		lane = 'history'; phase = 'dropped'; summary = 'You dropped this before anything shipped.';
 		actions = [action('supersede', 'Try again with changes')];
 	} else if (run.status === 'failed') {
@@ -242,7 +245,7 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 		summary = attention; actions = [action('supersede', 'Try again with changes', 'primary')];
 	}
 
-	const multiWorkerMayControl = multiWorker && !publication && !review && run.status !== 'cancelled' && run.status !== 'failed';
+	const multiWorkerMayControl = multiWorker && !run.archive && !publication && !review && run.status !== 'cancelled' && run.status !== 'failed';
 	if (multiWorkerMayControl && multiWorker.status === 'active') {
 		lane = 'working'; phase = 'split across workers'; summary = multiWorker.summary; attention = undefined; actions = [];
 	} else if (multiWorkerMayControl && (multiWorker.status === 'not_started' || multiWorker.status === 'waiting')) {
@@ -253,6 +256,9 @@ export function projectRunForBoard(run: RunRecord, publication?: DraftPublicatio
 		attention = multiWorker.reasons[0] ?? multiWorker.summary; summary = multiWorker.summary; actions = [];
 	} else if (multiWorkerMayControl && multiWorker.status === 'complete') {
 		lane = 'working'; phase = 'pieces done'; summary = `${multiWorker.summary} Putting them back together is next.`; attention = undefined; actions = [];
+	}
+	if (!run.archive && lane === 'attention' && ['blocked', 'succeeded', 'failed', 'cancelled'].includes(run.status)) {
+		actions = [...actions, action('archive', 'Archive')];
 	}
 
 	return v.parse(OperatorBoardCardSchema, {

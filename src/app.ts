@@ -446,6 +446,22 @@ app.post('/api/runs/:runId/cancel', async (context) => {
 	}
 });
 
+app.post('/api/runs/:runId/archive', async (context) => {
+	try {
+		return context.json(jobLedger.archive(context.req.param('runId'), await context.req.json(), context.get('principal')));
+	} catch (error) {
+		return ledgerError(context, error);
+	}
+});
+
+app.post('/api/runs/:runId/restore', async (context) => {
+	try {
+		return context.json(jobLedger.restore(context.req.param('runId'), await context.req.json(), context.get('principal')));
+	} catch (error) {
+		return ledgerError(context, error);
+	}
+});
+
 app.post('/api/runs/:runId/execute', async (context) => {
 	try {
 		return context.json(await runOrchestrationService.execute(
