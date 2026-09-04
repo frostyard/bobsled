@@ -216,6 +216,9 @@ Live acceptance evidence: an authenticated operator revised and finalized a stru
   - [x] Discover Frostyard repositories through scoped GitHub metadata, import a repository-owned policy declaration, and expose authenticated enroll/disable actions without a deployment.
   - [x] Retain version-bound enrollment observations and surface open, non-archived work whose policy snapshot differs from current enrollment.
 - [ ] Fleet concurrency, quotas, observability retention, and operational dashboards.
+  - [x] Project repository and organization workload, active immutable multi-worker budget utilization, and retained observability extent without scheduling authority.
+  - [ ] Add a durable, operator-managed organization concurrency and provider-call policy, then enforce it atomically before new work claims.
+  - [ ] Add versioned evidence-retention policy and recoverable pruning/export maintenance.
 - [ ] Human approval queues, notifications, and historical reporting.
 
 Migration 47 replaces the source-code array as runtime enrollment authority. On first application only, it validates and copies the three previously reviewed declarations into a durable current registry plus append-only version-1 bootstrap events, then records the migration so deletion or disablement can never cause the declarations to be silently replayed. Every current record binds the immutable GitHub repository ID, complete validated policy JSON, canonical SHA-256 digest, optimistic version, actor, reason, and timestamp to its retained event. Policy changes use immediate transactions, idempotency keys, immutable identity checks, and compare-and-set versions across processes. Existing services retain one stable in-process array reference populated from SQLite so their policy lookups continue to observe deliberate registry refreshes; direct repository resolution reads the durable current record and fails closed on disabled or tampered evidence. The migration itself grants no browser mutation or GitHub authority.
@@ -227,6 +230,8 @@ Operator-managed enrollment uses installation-wide `metadata:read` only to enume
 Migration 48 makes drift evidence explicit and durable. Loading Access reads only the latest retained observations. **Check repository drift** performs bounded, sequential metadata reads and atomically appends one observation per enabled repository, bound to its exact enrollment version and policy digest. Historical observations remain verifiable against their retained enrollment event. The projection separately reports open, non-archived runs whose immutable policy snapshot differs from current enrollment; it does not rewrite, cancel, retry, or silently upgrade those runs.
 
 Live migration-48 acceptance found three policy-old website parents whose delivery was already terminal. The impact projection now follows operator-actionable lifecycle truth: merged or closed publications, explicitly resolved stale-publication supersessions, verified no-change outcomes, and archived runs are excluded without changing their retained evidence.
+
+The first fleet dashboard is a side-effect-free projection over existing durable ledgers. It reports pending and active runs, attempts, reviews, and publications by repository; aggregates active multi-worker attempts and provider calls against the immutable budgets that authorized those plans; and exposes retained Flue event count, bytes, and oldest/newest timestamps. It states that organization concurrency is not configured and retention remains indefinite. The projection cannot reserve a slot, change policy, remove evidence, schedule work, or dispatch a model.
 
 ## Current safety boundary
 

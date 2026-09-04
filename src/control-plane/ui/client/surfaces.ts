@@ -9,10 +9,11 @@ async function accessSurface(surface) {
     body,
   ]));
 
-  const [authority, status, observability, repositoryDrift, enrollments] = await Promise.all([
+  const [authority, status, observability, fleet, repositoryDrift, enrollments] = await Promise.all([
     json('/api/github-app/authority').catch((error) => ({ error: message(error) })),
     json('/api/github-app/status').catch(() => undefined),
     json('/api/observability/status').catch(() => undefined),
+    json('/api/operations/fleet').catch(() => undefined),
     json('/api/repositories/drift').catch(() => undefined),
     json('/api/repository-enrollments').catch(() => []),
   ]);
@@ -52,6 +53,22 @@ async function accessSurface(surface) {
       ['Agent events', String(observability.total || 0)],
       ['Stored', Math.round((observability.storedBytes || 0) / 1024) + ' KB'],
       ['Last seen', observability.lastObservedAt ? ago(observability.lastObservedAt) : 'never'],
+    ]));
+  }
+  if (fleet) {
+    body.append(el('div', { class: 'subhead', text: 'Fleet capacity' }));
+    body.append(evGrid([
+      ['Queued runs', String(fleet.organization.workload.pendingRuns)],
+      ['Active runs', String(fleet.organization.workload.activeRuns)],
+      ['Active attempts', String(fleet.organization.workload.activeAttempts)],
+      ['Active reviews', String(fleet.organization.workload.activeReviews)],
+      ['Active publications', String(fleet.organization.workload.activePublications)],
+      ['Organization ceiling', fleet.organization.concurrencyLimitConfigured ? 'configured' : 'not configured'],
+      ['Active worker plans', String(fleet.organization.multiWorkerQuota.activePlans)],
+      ['Worker attempts', String(fleet.organization.multiWorkerQuota.workerAttempts.used) + ' / ' + String(fleet.organization.multiWorkerQuota.workerAttempts.declared)],
+      ['Codex calls', String(fleet.organization.multiWorkerQuota.subscriptionCalls.openaiCodex.used) + ' / ' + String(fleet.organization.multiWorkerQuota.subscriptionCalls.openaiCodex.declared)],
+      ['Copilot calls', String(fleet.organization.multiWorkerQuota.subscriptionCalls.githubCopilot.used) + ' / ' + String(fleet.organization.multiWorkerQuota.subscriptionCalls.githubCopilot.declared)],
+      ['Observation retention', fleet.observability.retentionMode],
     ]));
   }
 

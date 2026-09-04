@@ -24,6 +24,8 @@ M8 begins by moving repository enrollment out of runtime source configuration. M
 
 Migration 48 retains each explicit repository drift check against the exact enrollment version and policy digest. Access page reads are side-effect-free; **Check repository drift** is the only metadata-read/write action. The resulting projection also identifies operator-actionable, non-archived runs that still carry an older immutable policy snapshot, excluding terminal delivery and verified no-change outcomes without changing any run.
 
+The first fleet-operations projection is read-only. It aggregates queued and active work by repository, measures live multi-worker usage against immutable plan budgets, and reports the extent of retained Flue evidence. It explicitly reports that no organization-wide concurrency ceiling is configured; no dashboard read reserves work, changes a quota, prunes evidence, or dispatches a model. See [fleet operations](./docs/fleet-operations.md).
+
 See [ROADMAP.md](./ROADMAP.md) for durable milestone status and [docs/architecture.md](./docs/architecture.md) for the control-plane design, including multi-repository change sets.
 
 ## Requirements
