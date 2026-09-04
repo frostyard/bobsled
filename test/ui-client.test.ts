@@ -247,6 +247,25 @@ test('an empty lane says what being empty means', async () => {
 	assert.ok(harness.document.textContent.includes('Nothing waiting on you.'));
 });
 
+test('the Access surface shows repository alignment and bounded drift findings', async () => {
+	const harness = await boot({
+		'/api/repositories': repositories,
+		'/api/github-app/authority': { status: 'within_policy', excessPermissions: [] },
+		'/api/github-app/status': { configured: true, webhooks: { total: 4 } },
+		'/api/observability/status': { total: 12, storedBytes: 1024 },
+		'/api/repositories/drift': [{
+			repositoryId: 'frostyard/clix', status: 'drifted', checkedAt: new Date().toISOString(),
+			policyDigest: 'a'.repeat(64),
+			policy: { enabled: true, readOnly: true, executionEnabled: true, reviewEnabled: true, publicationEnabled: false, multiWorkerEnabled: false },
+			findings: [{ kind: 'default_branch', expected: 'main', observed: 'trunk' }],
+		}],
+	}, '/access');
+
+	assert.match(harness.document.textContent, /frostyard\/clix/);
+	assert.match(harness.document.textContent, /read only · drift found · default branch/);
+	assert.equal(harness.calls.some(({ url }) => url === '/api/repositories/drift'), true);
+});
+
 test('a durable action opens the authorization sheet and does not fire until it is confirmed', async () => {
 	const harness = await boot({
 		'/api/repositories': repositories,

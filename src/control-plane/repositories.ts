@@ -1,7 +1,10 @@
 import * as v from 'valibot';
 import { RepositoryContractSchema, type RepositoryContract } from './contracts.ts';
+import { RepositoryEnrollmentStore } from './repository-enrollment-store.ts';
 
-const enrolled = [
+// Migration-only bootstrap declarations. Once migration 47 records them, the
+// durable registry is authoritative and these values are never replayed.
+const bootstrapRepositories = [
 	{
 		id: 'frostyard/clix',
 		githubRepositoryId: 1172846628,
@@ -215,10 +218,26 @@ const enrolled = [
 	},
 ] satisfies unknown[];
 
-export const repositories: readonly RepositoryContract[] = enrolled.map((entry) =>
+const bootstrap = bootstrapRepositories.map((entry) =>
 	v.parse(RepositoryContractSchema, entry),
 );
 
+export const repositoryEnrollmentStore = new RepositoryEnrollmentStore(undefined, undefined, bootstrap);
+const activeRegistry: RepositoryContract[] = repositoryEnrollmentStore.list().map(({ repository }) => repository);
+
+/** Stable reference retained by legacy constructors; contents come from SQLite. */
+export const repositories: readonly RepositoryContract[] = activeRegistry;
+
+export function refreshRepositories(): readonly RepositoryContract[] {
+	activeRegistry.splice(0, activeRegistry.length, ...repositoryEnrollmentStore.list().map(({ repository }) => repository));
+	return repositories;
+}
+
 export function getRepository(id: string): RepositoryContract | undefined {
-	return repositories.find((repository) => repository.id === id && repository.enabled);
+	const current = repositoryEnrollmentStore.get(id)?.repository;
+	if (!current) return undefined;
+	const index = activeRegistry.findIndex((repository) => repository.id === id);
+	if (index === -1) activeRegistry.push(current);
+	else activeRegistry[index] = current;
+	return current.enabled ? current : undefined;
 }

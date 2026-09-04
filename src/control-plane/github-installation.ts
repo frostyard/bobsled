@@ -3,6 +3,7 @@ import { resolveGitHubPrivateKey, type PrivateKeyReader } from './github-app.ts'
 import { getRepository } from './repositories.ts';
 
 const permissionProfiles = {
+	repository_metadata_read: { metadata: 'read' },
 	issue_metadata_read: { issues: 'read' },
 	issue_metadata_write: { issues: 'write' },
 	repository_contents_read: { contents: 'read' },
