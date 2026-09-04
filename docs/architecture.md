@@ -14,6 +14,8 @@ The initial fleet-operations view adds no schema and no claim path. It reads exi
 
 Migration 49 retains organization capacity policy as an append-only version stream. Each record binds bounded workflow and provider-concurrency limits to a canonical digest, optimistic predecessor version, principal, reason, idempotency key, and timestamp. Reads recompute policy and request digests. The Access action is observe-only: no trigger or claim path consults the record yet, and the API states enforcement is disabled. A later migration must introduce one common capacity claim and make every provider-dispatch ledger adopt it before enabling the policy.
 
+Migration 50 adds the shared observe-only provider claim to every production dispatch path. Migration 51 bounds those claims with a two-hour lease, one hour beyond the longest repository/provider timeout. Expiry is projection-only until an authenticated operator explicitly records an idempotent recovery batch. Recovery transitions only expired active claims to immutable `ambiguous` evidence, removes them from active occupancy, and leaves their unique source identities consumed so neither the capacity layer nor the source workflow can silently retry them. The fleet view exposes aggregate expired and ambiguous counts. No recovery action changes a provider result, starts work, or activates enforcement.
+
 ## Schema boundaries
 
 - **Repository contract** — enrolled identity, default branch, agent instruction surfaces, quality gates, protected paths, and allowed capabilities.

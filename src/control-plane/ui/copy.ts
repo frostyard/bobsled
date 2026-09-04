@@ -61,6 +61,13 @@ export interface AuthorityCopy {
 }
 
 export const AUTHORITY: Record<string, AuthorityCopy> = {
+	recover_capacity_claims: {
+		title: 'Reconcile these expired provider claims?', confirm: 'Record ambiguity',
+		grants: ['Release expired claims from fleet occupancy', 'Preserve immutable ambiguity and operator evidence'],
+		denies: ['Retry or cancel a provider call', 'Change the source workflow outcome', 'Enable capacity enforcement or start work'],
+		placeholder: 'Why these expired claims should be retired from occupancy.',
+		note: 'The original source identity remains consumed. This action cannot authorize a second provider call.',
+	},
 	configure_capacity_policy: {
 		title: 'Save these fleet limits?', confirm: 'Save limits',
 		grants: ['Record a versioned organization capacity policy', 'Make these limits available to the future shared claim gate'],

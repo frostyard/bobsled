@@ -7,7 +7,7 @@ import type { OrganizationCapacityPolicyRecord } from './organization-capacity-p
 const CountSchema = v.pipe(v.number(), v.integer(), v.minValue(0));
 const WorkloadSchema = v.object({ pendingRuns: CountSchema, activeRuns: CountSchema, activeAttempts: CountSchema, activeReviews: CountSchema, activePublications: CountSchema });
 const MultiWorkerQuotaSchema = v.object({ activePlans: CountSchema, activeAttempts: CountSchema, workerAttempts: v.object({ used: CountSchema, declared: CountSchema }), subscriptionCalls: v.object({ openaiCodex: v.object({ used: CountSchema, declared: CountSchema }), githubCopilot: v.object({ used: CountSchema, declared: CountSchema }) }) });
-const CapacityUsageSchema = v.object({ activeWorkflows: CountSchema, providerCalls: v.object({ openaiCodex: CountSchema, githubCopilot: CountSchema }), wouldExceedPolicyClaims: CountSchema });
+const CapacityUsageSchema = v.object({ activeWorkflows: CountSchema, providerCalls: v.object({ openaiCodex: CountSchema, githubCopilot: CountSchema }), wouldExceedPolicyClaims: CountSchema, expiredClaims: CountSchema, ambiguousClaims: CountSchema });
 export const FleetOperationsViewSchema = v.object({
 	generatedAt: v.string(),
 	organization: v.object({
@@ -48,11 +48,14 @@ export class FleetOperationsProjector {
 		const repositories = input.map((repository) => v.parse(RepositoryPolicySnapshotSchema, repository));
 		const db = this.#database();
 		return db.transaction(() => {
-			const capacityUsageRow = db.prepare(`SELECT COUNT(*) AS active_workflows,
-				COALESCE(SUM(openai_codex_slots),0) AS openai_codex,
-				COALESCE(SUM(github_copilot_slots),0) AS github_copilot,
-				COALESCE(SUM(would_exceed_policy),0) AS would_exceed
-				FROM organization_capacity_claims WHERE status='active'`).get() as { active_workflows: number; openai_codex: number; github_copilot: number; would_exceed: number };
+			const capacityUsageRow = db.prepare(`SELECT
+				COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END),0) AS active_workflows,
+				COALESCE(SUM(CASE WHEN status='active' THEN openai_codex_slots ELSE 0 END),0) AS openai_codex,
+				COALESCE(SUM(CASE WHEN status='active' THEN github_copilot_slots ELSE 0 END),0) AS github_copilot,
+				COALESCE(SUM(CASE WHEN status='active' THEN would_exceed_policy ELSE 0 END),0) AS would_exceed,
+				COALESCE(SUM(CASE WHEN status='active' AND expires_at<=? THEN 1 ELSE 0 END),0) AS expired,
+				COALESCE(SUM(CASE WHEN status='ambiguous' THEN 1 ELSE 0 END),0) AS ambiguous
+				FROM organization_capacity_claims`).get(this.#now().toISOString()) as { active_workflows: number; openai_codex: number; github_copilot: number; would_exceed: number; expired: number; ambiguous: number };
 			const workloadRows = db.prepare(`SELECT j.repository_id,
 				COUNT(DISTINCT CASE WHEN r.status='pending' THEN r.id END) AS pending_runs,
 				COUNT(DISTINCT CASE WHEN r.status='active' THEN r.id END) AS active_runs,
@@ -82,7 +85,7 @@ export class FleetOperationsProjector {
 			const organization = {
 				workload: zeroWorkload(), concurrencyLimitConfigured: capacity !== undefined, enforcementMode: 'disabled' as const,
 				capacityPolicy: capacity && { version: capacity.version, ...capacity.policy },
-				capacityUsage: { activeWorkflows: capacityUsageRow.active_workflows, providerCalls: { openaiCodex: capacityUsageRow.openai_codex, githubCopilot: capacityUsageRow.github_copilot }, wouldExceedPolicyClaims: capacityUsageRow.would_exceed },
+				capacityUsage: { activeWorkflows: capacityUsageRow.active_workflows, providerCalls: { openaiCodex: capacityUsageRow.openai_codex, githubCopilot: capacityUsageRow.github_copilot }, wouldExceedPolicyClaims: capacityUsageRow.would_exceed, expiredClaims: capacityUsageRow.expired, ambiguousClaims: capacityUsageRow.ambiguous },
 				multiWorkerQuota: zeroQuota(),
 			};
 			for (const repository of projected) {
