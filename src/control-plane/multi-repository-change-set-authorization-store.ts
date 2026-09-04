@@ -32,7 +32,7 @@ export const MultiRepositoryChangeSetAuthorizationSchema = v.object({
 	planSha256: Sha256Schema,
 	memberSetSha256: Sha256Schema,
 	members: v.pipe(v.array(MultiRepositoryMemberAuthorizationSchema), v.minLength(2), v.maxLength(16)),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	coordinationAuthorized: v.literal(true),
 	workspaceAuthorized: v.literal(false),
 	modelDispatchAuthorized: v.literal(false),
@@ -42,7 +42,7 @@ export const MultiRepositoryChangeSetAuthorizationSchema = v.object({
 
 const AuthorizeRequestSchema = v.object({
 	changeSetId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type MultiRepositoryChangeSetAuthorization = v.InferOutput<typeof MultiRepositoryChangeSetAuthorizationSchema>;

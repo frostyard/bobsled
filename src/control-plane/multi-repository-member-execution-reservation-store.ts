@@ -42,7 +42,7 @@ export const MultiRepositoryMemberExecutionReservationSchema = v.object({
 	baseCommit: v.pipe(v.string(), v.regex(/^[a-f0-9]{40}$/)),
 	workspacePath: v.pipe(v.string(), v.minLength(1)),
 	evidencePath: v.pipe(v.string(), v.minLength(1)),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	preflightAuthorized: v.boolean(),
 	modelDispatchClaimed: v.boolean(),
 	modelDispatchAuthorized: v.literal(false),
@@ -56,7 +56,7 @@ export const MultiRepositoryMemberExecutionReservationSchema = v.object({
 
 const ReserveRequestSchema = v.object({
 	leaseId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type MultiRepositoryMemberExecutionReservation = v.InferOutput<typeof MultiRepositoryMemberExecutionReservationSchema>;

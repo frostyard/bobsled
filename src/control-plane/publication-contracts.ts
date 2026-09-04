@@ -3,7 +3,7 @@ import * as v from 'valibot';
 export const DraftPublicationRequestSchema = v.object({
 	runId: v.pipe(v.string(), v.uuid()),
 	expectedVersion: v.pipe(v.number(), v.integer(), v.minValue(1)),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export const PublicationCheckSchema = v.object({

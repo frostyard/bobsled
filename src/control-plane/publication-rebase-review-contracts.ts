@@ -6,7 +6,7 @@ const DigestSchema = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/));
 
 export const PublicationRebaseReviewRequestSchema = v.object({
 	rebaseId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export const PublicationRebaseReviewBlockReasonSchema = v.picklist([
@@ -57,7 +57,7 @@ export type PublicationRebaseReviewBlockReason = v.InferOutput<typeof Publicatio
 
 export const RecoveredDraftPublicationRequestSchema = v.object({
 	rebaseReviewId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type RecoveredDraftPublicationRequest = v.InferOutput<typeof RecoveredDraftPublicationRequestSchema>;

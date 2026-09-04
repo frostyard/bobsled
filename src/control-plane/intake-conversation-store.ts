@@ -12,8 +12,8 @@ import { getRepository } from './repositories.ts';
 
 const CreateSchema=v.object({repositoryId:RepositoryIdSchema,seed:WorkItemSchema,brief:IntakeBriefSchema});
 const AppendSchema=v.object({expectedVersion:v.pipe(v.number(),v.integer(),v.minValue(1)),role:v.picklist(['operator','assistant']),text:v.pipe(v.string(),v.minLength(1),v.maxLength(20_000)),brief:IntakeBriefSchema});
-const CancelSchema=v.object({expectedVersion:v.pipe(v.number(),v.integer(),v.minValue(1)),reason:v.pipe(v.string(),v.minLength(10),v.maxLength(2_000))});
-const CorrectSchema=v.object({reason:v.pipe(v.string(),v.minLength(10),v.maxLength(2_000))});
+const CancelSchema=v.object({expectedVersion:v.pipe(v.number(),v.integer(),v.minValue(1)),reason:v.pipe(v.string(),v.minLength(1),v.maxLength(2_000))});
+const CorrectSchema=v.object({reason:v.pipe(v.string(),v.minLength(1),v.maxLength(2_000))});
 export { IntakeBriefSchema, IntakeConversationSchema, IntakeConversationTurnSchema } from './intake-conversation-contracts.ts';
 export type { IntakeBrief, IntakeConversation } from './intake-conversation-contracts.ts';
 export class IntakeConversationConflictError extends Error{} export class IntakeConversationForbiddenError extends Error{} export class IntakeConversationNotFoundError extends Error{}

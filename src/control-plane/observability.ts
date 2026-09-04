@@ -36,7 +36,7 @@ interface ObservationCountRow {
 
 interface ActivityRow {
 	id: number;
-	conversation_id: string | null;
+	context_id: string;
 	agent_name: string | null;
 	event_type: string;
 	event_timestamp: string;
@@ -152,6 +152,7 @@ export class FlueObservationStore {
 				recorded_at TEXT NOT NULL
 			);
 			CREATE INDEX IF NOT EXISTS flue_observations_submission_idx ON flue_observations(submission_id, id);
+			CREATE INDEX IF NOT EXISTS flue_observations_context_idx ON flue_observations(context_id, id);
 			CREATE INDEX IF NOT EXISTS flue_observations_conversation_idx ON flue_observations(conversation_id, id);
 			CREATE INDEX IF NOT EXISTS flue_observations_type_time_idx ON flue_observations(event_type, event_timestamp);
 			INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, datetime('now'));
@@ -215,17 +216,18 @@ export class FlueObservationStore {
 	 * Reads back the observations already captured for one unit of agent work,
 	 * so an operator can watch it happen instead of only seeing the outcome.
 	 *
-	 * Conversation ids are deterministic per worker (`implementation-<attemptId>`,
-	 * `review-<reviewId>-...`), so a caller identifies a run's work by prefix.
+	 * Context ids are deterministic per worker (`implementation-<attemptId>`,
+	 * `review-<reviewId>-...`), while Flue assigns its own conversation ids.
+	 * A caller therefore identifies a run's work by trusted context-id prefix.
 	 * This is a read-only projection: it starts nothing, claims nothing, and
 	 * spends no subscription call.
 	 */
 	activity(prefixes: readonly string[], afterId = 0, limit = 400): ActivityEvent[] {
 		const wanted = prefixes.filter((prefix) => prefix.length > 0 && prefix.length <= 200);
 		if (!wanted.length) return [];
-		// LIKE 'prefix%' with no other wildcards stays on the conversation index.
-		const clause = wanted.map(() => 'conversation_id LIKE ? ESCAPE \'\\\'').join(' OR ');
-		const rows = this.#db.prepare(`SELECT id, conversation_id, agent_name, event_type, event_timestamp, payload_json
+		// LIKE 'prefix%' with no other wildcards stays on the context index.
+		const clause = wanted.map(() => 'context_id LIKE ? ESCAPE \'\\\'').join(' OR ');
+		const rows = this.#db.prepare(`SELECT id, context_id, agent_name, event_type, event_timestamp, payload_json
 			FROM flue_observations WHERE id > ? AND (${clause}) AND event_type IN ('tool_start','tool','text','log','agent_start','agent_end','submission_settled')
 			ORDER BY id LIMIT ?`).all(afterId, ...wanted.map((prefix) => `${prefix.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`), Math.min(Math.max(limit, 1), 1_000)) as ActivityRow[];
 		return rows.map((row) => {
@@ -233,7 +235,7 @@ export class FlueObservationStore {
 			try { payload = JSON.parse(row.payload_json) as Record<string, unknown>; } catch { payload = {}; }
 			return {
 				id: row.id,
-				conversationId: row.conversation_id ?? '',
+				conversationId: row.context_id,
 				agentName: row.agent_name ?? undefined,
 				type: row.event_type,
 				at: row.event_timestamp,

@@ -127,8 +127,12 @@ The implementation of these predicates is `src/control-plane/operator-board-view
 
 `test/ui-client.test.ts` boots that script against a small DOM and asserts the board renders, empty lanes explain themselves, and no durable action fires before its authorization is confirmed.
 
+Authorization reasons are optional operator notes, not prose gates. The client supplies an explicit action-specific default when the field is empty; any non-empty bounded note, including a concise approval such as `LGTM`, is retained verbatim. The control plane rejects only empty direct-API reasons and reasons above the existing maximum length.
+
 ## Watching a run
 
 A card in `working` or `review` offers **Watch it work**, which opens `/runs/:id/live`. That screen streams the Flue observations already recorded for the run's own implementation, review, and remediation workers, read through `GET /api/runs/:runId/activity`.
+
+Bobsled correlates those observations through the deterministic Flue context id it assigned to the worker. Flue's provider-generated conversation id is retained as evidence but is not used as the authorization boundary for a run's live stream.
 
 It is read-only by design. One attempt, one review, one remediation round, and a patch digest binding an approval to exact bytes all assume nobody reached into a running attempt. There is no way to steer an agent mid-run and there should not be one; the only control on the screen is **Stop**, and changing the outcome means stopping and rewriting the task.

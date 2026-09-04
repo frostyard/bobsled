@@ -34,7 +34,7 @@ export const MultiRepositoryChangeSetParentSchema = v.object({
 	status: v.literal('planned'),
 	planSha256: Sha256Schema,
 	plan: MultiRepositoryChangeSetPlanV1Schema,
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	members: v.pipe(v.array(MultiRepositoryChangeSetMemberParentSchema), v.minLength(2), v.maxLength(16)),
 	executionAuthorized: v.literal(false),
 	publicationAuthorized: v.literal(false),
@@ -44,7 +44,7 @@ export const MultiRepositoryChangeSetParentSchema = v.object({
 
 const AdmitMultiRepositoryChangeSetRequestSchema = v.object({
 	plan: MultiRepositoryChangeSetPlanV1Schema,
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type MultiRepositoryChangeSetParent = v.InferOutput<typeof MultiRepositoryChangeSetParentSchema>;

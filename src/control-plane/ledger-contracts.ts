@@ -19,7 +19,7 @@ export const AdmitRunRequestSchema = v.object({
 });
 
 export const HumanOverrideRequestSchema = v.object({
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	expectedVersion: v.pipe(v.number(), v.integer(), v.minValue(1)),
 });
 

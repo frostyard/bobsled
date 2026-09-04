@@ -13,8 +13,8 @@ import { JobLedger, type Principal } from './ledger.ts';
 import type { RunRecord } from './ledger-contracts.ts';
 
 const Sha256Schema=v.pipe(v.string(),v.regex(/^[a-f0-9]{64}$/));
-const ReserveSchema=v.object({triageId:v.pipe(v.string(),v.uuid()),reason:v.pipe(v.string(),v.minLength(10),v.maxLength(2_000))});
-export const IntakeSnapshotRunAdmissionSchema=v.object({id:v.pipe(v.string(),v.uuid()),snapshotId:v.pipe(v.string(),v.uuid()),triageId:v.pipe(v.string(),v.uuid()),ownerId:v.pipe(v.string(),v.minLength(1),v.maxLength(500)),repositorySha256:Sha256Schema,workItemSha256:Sha256Schema,triageResultSha256:Sha256Schema,status:v.picklist(['reserved','succeeded']),runId:v.optional(v.pipe(v.string(),v.uuid())),reason:v.pipe(v.string(),v.minLength(10),v.maxLength(2_000)),runAdmissionAuthorized:v.boolean(),executionAuthorized:v.literal(false),githubMutationAuthorized:v.literal(false),createdAt:v.string(),finishedAt:v.optional(v.string())});
+const ReserveSchema=v.object({triageId:v.pipe(v.string(),v.uuid()),reason:v.pipe(v.string(),v.minLength(1),v.maxLength(2_000))});
+export const IntakeSnapshotRunAdmissionSchema=v.object({id:v.pipe(v.string(),v.uuid()),snapshotId:v.pipe(v.string(),v.uuid()),triageId:v.pipe(v.string(),v.uuid()),ownerId:v.pipe(v.string(),v.minLength(1),v.maxLength(500)),repositorySha256:Sha256Schema,workItemSha256:Sha256Schema,triageResultSha256:Sha256Schema,status:v.picklist(['reserved','succeeded']),runId:v.optional(v.pipe(v.string(),v.uuid())),reason:v.pipe(v.string(),v.minLength(1),v.maxLength(2_000)),runAdmissionAuthorized:v.boolean(),executionAuthorized:v.literal(false),githubMutationAuthorized:v.literal(false),createdAt:v.string(),finishedAt:v.optional(v.string())});
 export type IntakeSnapshotRunAdmission=v.InferOutput<typeof IntakeSnapshotRunAdmissionSchema>;
 export class IntakeSnapshotRunAdmissionConflictError extends Error{}
 export class IntakeSnapshotRunAdmissionForbiddenError extends Error{}

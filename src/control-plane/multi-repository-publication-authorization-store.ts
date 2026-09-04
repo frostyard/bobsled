@@ -65,7 +65,7 @@ export const MultiRepositoryPublicationAuthorizationSchema = v.object({
 	members: v.pipe(v.array(MultiRepositoryPublicationMemberSchema), v.minLength(2), v.maxLength(16)),
 	rolloutLayers: v.pipe(v.array(v.pipe(v.array(RepositoryIdSchema), v.minLength(1))), v.minLength(1), v.maxLength(16)),
 	rollbackLayers: v.pipe(v.array(v.pipe(v.array(RepositoryIdSchema), v.minLength(1))), v.minLength(1), v.maxLength(16)),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	publicationBarrierSatisfied: v.literal(true),
 	draftPublicationExecutionAuthorized: v.literal(false),
 	githubMutationAuthorized: v.literal(false),
@@ -76,7 +76,7 @@ export const MultiRepositoryPublicationAuthorizationSchema = v.object({
 
 const AuthorizeSchema = v.object({
 	compatibilityExecutionId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type MultiRepositoryPublicationAuthorization = v.InferOutput<typeof MultiRepositoryPublicationAuthorizationSchema>;

@@ -3,12 +3,12 @@ import { RepositoryContractSchema, WorkItemSchema } from './contracts.ts';
 
 export const ExecutionAuthorizationRequestSchema = v.object({
 	expectedVersion: v.pipe(v.number(), v.integer(), v.minValue(1)),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export const ReviewAuthorizationRequestSchema = v.object({
 	expectedVersion: v.pipe(v.number(), v.integer(), v.minValue(1)),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export const ImplementationTaskSchema = v.object({

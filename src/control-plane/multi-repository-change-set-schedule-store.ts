@@ -38,7 +38,7 @@ export const MultiRepositoryChangeSetScheduleSchema = v.object({
 	dependencyLayers: v.pipe(v.array(v.pipe(v.array(RepositoryIdSchema), v.minLength(1))), v.minLength(1), v.maxLength(16)),
 	scheduledMemberSetSha256: Sha256Schema,
 	members: v.pipe(v.array(MultiRepositoryScheduledMemberSchema), v.minLength(2), v.maxLength(16)),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	schedulingAuthorized: v.literal(true),
 	preparationAuthorized: v.literal(false),
 	modelDispatchAuthorized: v.literal(false),
@@ -48,7 +48,7 @@ export const MultiRepositoryChangeSetScheduleSchema = v.object({
 
 const ScheduleRequestSchema = v.object({
 	authorizationId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type MultiRepositoryChangeSetSchedule = v.InferOutput<typeof MultiRepositoryChangeSetScheduleSchema>;

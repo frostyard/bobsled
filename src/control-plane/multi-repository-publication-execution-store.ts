@@ -53,7 +53,7 @@ export const MultiRepositoryPublicationExecutionSchema = v.object({
 	status: v.picklist(['reserved', 'prepared', 'running', 'succeeded', 'partial', 'blocked', 'failed']),
 	publicationsStarted: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(16)),
 	authorizationSha256: Sha256Schema,
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	createdAt: v.string(), startedAt: v.optional(v.string()), finishedAt: v.optional(v.string()),
 	manifest: v.optional(MultiRepositoryPublicationExecutionManifestSchema),
 	manifestSha256: v.optional(Sha256Schema),
@@ -62,7 +62,7 @@ export const MultiRepositoryPublicationExecutionSchema = v.object({
 	rolloutAuthorized: v.literal(false), mergeAuthorized: v.literal(false),
 });
 
-const ReserveSchema = v.object({ authorizationId: v.pipe(v.string(), v.uuid()), reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)) });
+const ReserveSchema = v.object({ authorizationId: v.pipe(v.string(), v.uuid()), reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)) });
 export type MultiRepositoryPublicationExecutionMember = v.InferOutput<typeof MultiRepositoryPublicationExecutionMemberSchema>;
 export type MultiRepositoryPublicationExecutionManifest = v.InferOutput<typeof MultiRepositoryPublicationExecutionManifestSchema>;
 export type MultiRepositoryPublicationExecutionResult = v.InferOutput<typeof MultiRepositoryPublicationExecutionResultSchema>;

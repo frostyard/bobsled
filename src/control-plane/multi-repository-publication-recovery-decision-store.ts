@@ -11,11 +11,11 @@ import { publicationRecoveryPlanDigest } from './multi-repository-publication-re
 
 const Sha256Schema=v.pipe(v.string(),v.regex(/^[a-f0-9]{64}$/));
 const RequestSchema=v.variant('disposition',[
-	v.object({recoveryPlanId:v.pipe(v.string(),v.uuid()),disposition:v.literal('human_rollback_required'),reason:v.pipe(v.string(),v.minLength(10),v.maxLength(2000))}),
-	v.object({recoveryPlanId:v.pipe(v.string(),v.uuid()),disposition:v.literal('superseded_by_new_change_set'),supersedingChangeSetId:v.pipe(v.string(),v.uuid()),reason:v.pipe(v.string(),v.minLength(10),v.maxLength(2000))}),
+	v.object({recoveryPlanId:v.pipe(v.string(),v.uuid()),disposition:v.literal('human_rollback_required'),reason:v.pipe(v.string(),v.minLength(1),v.maxLength(2000))}),
+	v.object({recoveryPlanId:v.pipe(v.string(),v.uuid()),disposition:v.literal('superseded_by_new_change_set'),supersedingChangeSetId:v.pipe(v.string(),v.uuid()),reason:v.pipe(v.string(),v.minLength(1),v.maxLength(2000))}),
 ]);
 const ResultSchema=v.object({version:v.literal(1),recoveryPlanSha256:Sha256Schema,disposition:v.picklist(['human_rollback_required','superseded_by_new_change_set']),supersedingChangeSetId:v.optional(v.pipe(v.string(),v.uuid())),rollbackOrder:v.array(v.object({repositoryId:v.string(),publicationId:v.pipe(v.string(),v.uuid()),pullNumber:v.pipe(v.number(),v.integer(),v.minValue(1)),pullUrl:v.string(),action:v.literal('human_close_or_revert')})),retryExecutionAuthorized:v.literal(false),githubMutationAuthorized:v.literal(false),rollbackExecuted:v.literal(false),mergeAuthorized:v.literal(false)});
-export const MultiRepositoryPublicationRecoveryDecisionSchema=v.object({id:v.pipe(v.string(),v.uuid()),recoveryPlanId:v.pipe(v.string(),v.uuid()),sourceExecutionId:v.pipe(v.string(),v.uuid()),changeSetId:v.pipe(v.string(),v.uuid()),ownerId:v.string(),disposition:v.picklist(['human_rollback_required','superseded_by_new_change_set']),supersedingChangeSetId:v.optional(v.pipe(v.string(),v.uuid())),reason:v.pipe(v.string(),v.minLength(10),v.maxLength(2000)),result:ResultSchema,createdAt:v.string()});
+export const MultiRepositoryPublicationRecoveryDecisionSchema=v.object({id:v.pipe(v.string(),v.uuid()),recoveryPlanId:v.pipe(v.string(),v.uuid()),sourceExecutionId:v.pipe(v.string(),v.uuid()),changeSetId:v.pipe(v.string(),v.uuid()),ownerId:v.string(),disposition:v.picklist(['human_rollback_required','superseded_by_new_change_set']),supersedingChangeSetId:v.optional(v.pipe(v.string(),v.uuid())),reason:v.pipe(v.string(),v.minLength(1),v.maxLength(2000)),result:ResultSchema,createdAt:v.string()});
 export type MultiRepositoryPublicationRecoveryDecision=v.InferOutput<typeof MultiRepositoryPublicationRecoveryDecisionSchema>;
 export class MultiRepositoryPublicationRecoveryDecisionConflictError extends Error{}
 export class MultiRepositoryPublicationRecoveryDecisionForbiddenError extends Error{}

@@ -48,7 +48,7 @@ export const MultiRepositoryMemberPreparationLeaseSchema = v.object({
 	unitSha256: Sha256Schema,
 	policySnapshotSha256: Sha256Schema,
 	policySnapshot: RepositoryContractSchema,
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	workspacePreparationAuthorized: v.boolean(),
 	modelDispatchAuthorized: v.literal(false),
 	executionAuthorized: v.literal(false),
@@ -66,7 +66,7 @@ export const MultiRepositoryMemberPreparationLeaseSchema = v.object({
 const ReserveRequestSchema = v.object({
 	scheduleId: v.pipe(v.string(), v.uuid()),
 	repositoryId: RepositoryIdSchema,
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type MultiRepositoryMemberPreparationLease = v.InferOutput<typeof MultiRepositoryMemberPreparationLeaseSchema>;
