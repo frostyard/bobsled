@@ -102,12 +102,26 @@ export class RepositoryDriftObservationStore {
 
 	policyImpact(repositoryId: string, currentPolicyDigest: string) {
 		v.parse(RepositoryIdSchema, repositoryId);
-		const rows = this.#db.prepare(`SELECT DISTINCT r.id,r.status,j.policy_snapshot_json FROM runs r JOIN jobs j ON j.run_id=r.id
+		const hasPublications = Boolean(this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='draft_publications'").get());
+		const hasRecoveryResolutions = Boolean(this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='publication_recovery_resolutions'").get());
+		const rows = this.#db.prepare(`SELECT DISTINCT r.id,r.status,j.policy_snapshot_json,
+			(SELECT a.outcome_json FROM attempts a WHERE a.job_id=j.id ORDER BY a.number DESC LIMIT 1) AS outcome_json,
+			${hasPublications ? "EXISTS (SELECT 1 FROM draft_publications terminal_publication WHERE terminal_publication.run_id=r.id AND terminal_publication.status IN ('merged','closed'))" : '0'} AS terminal_publication,
+			${hasPublications && hasRecoveryResolutions ? 'EXISTS (SELECT 1 FROM draft_publications source_publication JOIN publication_recovery_resolutions resolution ON resolution.source_publication_id=source_publication.id WHERE source_publication.run_id=r.id)' : '0'} AS recovery_resolved
+			FROM runs r JOIN jobs j ON j.run_id=r.id
 			WHERE j.repository_id=? AND r.status IN ('pending','running','succeeded','blocked')
 			AND NOT EXISTS (SELECT 1 FROM audit_events archived WHERE archived.run_id=r.id AND archived.type='run.archived'
 				AND archived.sequence>COALESCE((SELECT MAX(restored.sequence) FROM audit_events restored WHERE restored.run_id=r.id AND restored.type='run.restored'),0))
-			ORDER BY r.updated_at DESC,r.id`).all(repositoryId) as Array<{ id: string; status: string; policy_snapshot_json: string }>;
-		const changed = rows.filter((row) => { try { return digest(JSON.parse(row.policy_snapshot_json)) !== currentPolicyDigest; } catch { return true; } });
+			ORDER BY r.updated_at DESC,r.id`).all(repositoryId) as Array<{ id: string; status: string; policy_snapshot_json: string; outcome_json: string | null; terminal_publication: number; recovery_resolved: number }>;
+		const actionable = rows.filter((row) => {
+			if (row.terminal_publication || row.recovery_resolved) return false;
+			if (row.status !== 'succeeded' || !row.outcome_json) return true;
+			try {
+				const outcome = JSON.parse(row.outcome_json) as { evidence?: { filesChanged?: unknown }; worker?: { result?: { disposition?: unknown } } };
+				return outcome.worker?.result?.disposition !== 'no_change' && outcome.evidence?.filesChanged !== 0;
+			} catch { return true; }
+		});
+		const changed = actionable.filter((row) => { try { return digest(JSON.parse(row.policy_snapshot_json)) !== currentPolicyDigest; } catch { return true; } });
 		const byStatus = { pending: 0, running: 0, succeeded: 0, blocked: 0 };
 		for (const row of changed) byStatus[row.status as keyof typeof byStatus] += 1;
 		return { changedOpenRunCount: changed.length, byStatus, sampleRunIds: changed.slice(0, 20).map(({ id }) => id), truncated: changed.length > 20 };
