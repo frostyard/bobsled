@@ -48,6 +48,8 @@ A linked multi-worker plan also places the card in `working` while it is planned
 
 A stale-base rebuild is also `working` while the zero-model exact-patch replay is pending or running.
 
+Before that replay, Bobsled may refresh a missing default-branch commit into a private Git ref. It never advances the trusted checkout's branch: a dirty checkout, unexpected GitHub origin, failed non-interactive fetch, changed HEAD, or commit mismatch stops the rebuild before preparation or model spend.
+
 ### Checking (lane id `review`)
 
 A card is in `review` when there is no publication record and its latest adversarial review is `queued` or `running`.
