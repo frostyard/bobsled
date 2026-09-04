@@ -27,6 +27,7 @@ import {
 } from './control-plane/ledger.ts';
 import { getRepository, repositories } from './control-plane/repositories.ts';
 import { repositoryDriftService } from './control-plane/repository-drift.ts';
+import { repositoryDriftObservationStore, RepositoryDriftObservationConflictError, RepositoryDriftObservationIntegrityError } from './control-plane/repository-drift-observation-store.ts';
 import { repositoryEnrollmentService, RepositoryEnrollmentPolicyError, RepositoryEnrollmentUpstreamError } from './control-plane/repository-enrollment-service.ts';
 import { RepositoryEnrollmentConflictError, RepositoryEnrollmentIntegrityError } from './control-plane/repository-enrollment-store.ts';
 import { triageWorkItem } from './control-plane/triage-service.ts';
@@ -185,6 +186,22 @@ function repositoryEnrollmentError(context: Parameters<Parameters<typeof app.onE
 	return context.json({ error: message }, 400);
 }
 
+function repositoryDriftError(context: Parameters<Parameters<typeof app.onError>[0]>[1], error: unknown) {
+	const message = error instanceof Error ? error.message : 'Repository drift check failed';
+	if (error instanceof RepositoryDriftObservationConflictError) return context.json({ error: message }, 409);
+	if (error instanceof RepositoryDriftObservationIntegrityError) return context.json({ error: message }, 503);
+	return context.json({ error: message }, 400);
+}
+
+function repositoryDriftProjection() {
+	return repositoryDriftObservationStore.latest().map((observation) => ({
+		...observation.record,
+		enrollmentVersion: observation.enrollmentVersion,
+		observationCount: repositoryDriftObservationStore.count(observation.repositoryId),
+		policyImpact: repositoryDriftObservationStore.policyImpact(observation.repositoryId, observation.record.policyDigest),
+	}));
+}
+
 app.route('/agents/bobsled', createAgentRouter(Bobsled));
 app.route('/agents/codex', createAgentRouter(CodexAgent));
 app.route('/agents/copilot', createAgentRouter(CopilotAgent));
@@ -221,7 +238,22 @@ app.get('/runs/:runId/live', (context) => context.html(operatorInterfaceHtml(con
 
 app.get('/api/repositories', (context) => context.json(repositories.filter(({ enabled }) => enabled)));
 
-app.get('/api/repositories/drift', async (context) => context.json(await repositoryDriftService.inspectAll()));
+app.get('/api/repositories/drift', (context) => {
+	try { return context.json(repositoryDriftProjection()); }
+	catch (error) { return repositoryDriftError(context, error); }
+});
+app.post('/api/repositories/drift/check', async (context) => {
+	try {
+		const principal = context.get('principal');
+		const idempotencyKey = context.req.header('idempotency-key') ?? '';
+		const replay = repositoryDriftObservationStore.replay(principal, idempotencyKey);
+		if (replay) return context.json(repositoryDriftProjection());
+		const records = await repositoryDriftService.inspectAll();
+		const enrollmentVersions = new Map(repositoryEnrollmentService.list().map(({ repository, version }) => [repository.id, version]));
+		repositoryDriftObservationStore.record(records.map((record) => ({ record, enrollmentVersion: enrollmentVersions.get(record.repositoryId) })), principal, idempotencyKey);
+		return context.json(repositoryDriftProjection());
+	} catch (error) { return repositoryDriftError(context, error); }
+});
 app.get('/api/repository-enrollments', (context) => context.json(repositoryEnrollmentService.list()));
 app.get('/api/repository-enrollments/discover', async (context) => {
 	try { return context.json(await repositoryEnrollmentService.discover()); }

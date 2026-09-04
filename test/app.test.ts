@@ -66,16 +66,26 @@ test('lists bounded durable repository enrollment state', async () => {
 	}
 });
 
-test('reports bounded repository drift without exposing installation authority', async () => {
+test('reads no repository drift until an explicit check records bounded observations', async () => {
 	const response = await app.request('/api/repositories/drift');
 	assert.equal(response.status, 200);
 	const records = await response.json() as Array<Record<string, unknown>>;
-	assert.equal(records.length, 3);
-	for (const record of records) {
+	assert.deepEqual(records, []);
+	const idempotencyKey = `drift-${randomUUID()}`;
+	const checked = await app.request('/api/repositories/drift/check', { method: 'POST', headers: { 'idempotency-key': idempotencyKey } });
+	assert.equal(checked.status, 200);
+	const observations = await checked.json() as Array<Record<string, unknown>>;
+	assert.equal(observations.length, 3);
+	for (const record of observations) {
 		assert.equal(record.status, 'unavailable');
 		assert.deepEqual(record.findings, [{ kind: 'unreachable' }]);
+		assert.equal(record.observationCount, 1);
+		assert.deepEqual(record.policyImpact, { changedOpenRunCount: 0, byStatus: { pending: 0, running: 0, succeeded: 0, blocked: 0 }, sampleRunIds: [], truncated: false });
 		for (const forbidden of ['token', 'permissions', 'githubRepositoryId', 'error']) assert.equal(forbidden in record, false);
 	}
+	const replay = await app.request('/api/repositories/drift/check', { method: 'POST', headers: { 'idempotency-key': idempotencyKey } });
+	assert.equal(replay.status, 200);
+	assert.deepEqual(await replay.json(), observations);
 });
 
 test('serves the operator interface', async () => {

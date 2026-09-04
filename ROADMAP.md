@@ -214,7 +214,7 @@ Live acceptance evidence: an authenticated operator revised and finalized a stru
   - [x] Replace source-code runtime authority with a durable, versioned repository-enrollment registry; retain the three reviewed declarations only as one-time migration bootstrap input.
   - [x] Project each enrolled repository's immutable GitHub identity, canonical name, default branch, active lifecycle, installation access, and current policy fingerprint through a bounded read-only operator check.
   - [x] Discover Frostyard repositories through scoped GitHub metadata, import a repository-owned policy declaration, and expose authenticated enroll/disable actions without a deployment.
-  - [ ] Retain versioned enrollment observations and surface policy changes that affect admitted or unattended work.
+  - [x] Retain version-bound enrollment observations and surface open, non-archived work whose policy snapshot differs from current enrollment.
 - [ ] Fleet concurrency, quotas, observability retention, and operational dashboards.
 - [ ] Human approval queues, notifications, and historical reporting.
 
@@ -223,6 +223,8 @@ Migration 47 replaces the source-code array as runtime enrollment authority. On 
 The first M8 operator projection is observation-only. The authenticated Access surface uses a repository-ID-scoped `metadata:read` installation token to fetch each durably enrolled repository by immutable GitHub ID. Trusted code compares the response with the versioned repository contract and reports `aligned`, `drifted`, or bounded `unavailable` evidence for identity, canonical name, default branch, archived state, and disabled state. It exposes the current policy digest and selected capability flags without returning tokens, permission grants, numeric GitHub IDs, or raw upstream errors. The read creates no enrollment, policy, run, workspace, model, scheduling, or GitHub-write authority.
 
 Operator-managed enrollment uses installation-wide `metadata:read` only to enumerate or re-fetch GitHub-owned identity. A confirmed enrollment then mints a separate token restricted to the candidate's immutable repository ID and `contents:read`, loads at most 100 KB from `.bobsled/repository.json` on GitHub's current default branch, and validates the version-1 declaration before appending registry state. The browser submits only repository ID, optimistic registry version, idempotency key, and operator reason; it cannot submit policy or immutable identity. Disablement appends a new version with `enabled: false`, immediately removes the repository from intake and token authority, and preserves all historical policy and run evidence. Re-enablement repeats the GitHub identity and policy fetch and appends another version; stale disabled authority is never restored implicitly. None of these actions creates work, calls a model, writes GitHub, merges, or deploys.
+
+Migration 48 makes drift evidence explicit and durable. Loading Access reads only the latest retained observations. **Check repository drift** performs bounded, sequential metadata reads and atomically appends one observation per enabled repository, bound to its exact enrollment version and policy digest. Historical observations remain verifiable against their retained enrollment event. The projection separately reports open, non-archived runs whose immutable policy snapshot differs from current enrollment; it does not rewrite, cancel, retry, or silently upgrade those runs.
 
 ## Current safety boundary
 
