@@ -116,3 +116,19 @@ Cancelled work may be superseded. Verified no-change work is terminal: it has no
 The browser periodically reloads the typed board projection while any implementation, review, publication, or check is active. Search and repository filters change visibility only; they never change lane membership or workflow state.
 
 The implementation of these predicates is `src/control-plane/operator-board-view.ts`. Its output is schema-validated before the browser receives it.
+
+## Where the interface lives
+
+`src/control-plane/ui/` renders the whole operator interface as one document:
+
+- `copy.ts` — every display string that is not produced by this projection: lane names and definitions, the two columns of each authorization sheet, brief field labels. Lane ids never change; only these names do.
+- `theme.ts` — design tokens and component styles. Type is split by role: sans for the interface, mono only for values that are exact (digests, SHAs, run ids, paths, gate names). The lane colours are the status palette, used everywhere state is shown; the accent means "primary action" and nothing else.
+- `client/` — one module per screen, plus the shared runtime in `core.ts` (data access, navigation, toasts, and the authorization sheet).
+
+`test/ui-client.test.ts` boots that script against a small DOM and asserts the board renders, empty lanes explain themselves, and no durable action fires before its authorization is confirmed.
+
+## Watching a run
+
+A card in `working` or `review` offers **Watch it work**, which opens `/runs/:id/live`. That screen streams the Flue observations already recorded for the run's own implementation, review, and remediation workers, read through `GET /api/runs/:runId/activity`.
+
+It is read-only by design. One attempt, one review, one remediation round, and a patch digest binding an approval to exact bytes all assume nobody reached into a running attempt. There is no way to steer an agent mid-run and there should not be one; the only control on the screen is **Stop**, and changing the outcome means stopping and rewriting the task.

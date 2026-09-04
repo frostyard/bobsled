@@ -64,7 +64,15 @@ npm run agent:bobsled -- --id demo --message "Now implement your top suggestion.
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173/> to pick a repository, load its open issues or write a task, and get a validated triage decision.
+Open <http://127.0.0.1:5173/> for the operator interface. It has five screens:
+
+- **Board** — every run, in six lanes: Ready, Working, Checking, Shipping, Needs you, Done. Each lane says what it means; a card shows only the next valid action. Runs live at `/runs/:id`, and a run that is Working or Checking can be watched live at `/runs/:id/live`.
+- **Intake** — pick a task, talk it through, lock it in, queue it up. Locking freezes the brief and sends it straight to an independent check; you read the verdict before anything is queued.
+- **Change sets** — work that spans repositories. The machinery exists; nothing has used it yet.
+- **Access** — what the GitHub App can reach, and whether that is more than it should be.
+- **Activity** — what has happened, newest first.
+
+Every durable decision goes through an authorization sheet that states what it allows, what it still cannot do, and records the reason you give. Nothing in the interface can push, merge, or deploy.
 
 Routes:
 
@@ -76,6 +84,7 @@ Routes:
 - `POST /api/triage`
 - `GET /api/runs`
 - `GET /api/runs/:runId`
+- `GET /api/runs/:runId/activity` (read-only live agent steps; starts nothing and spends no subscription call)
 - `POST /api/runs`
 - `POST /api/runs/:runId/override`
 - `POST /api/runs/:runId/cancel`

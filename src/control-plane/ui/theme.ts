@@ -30,6 +30,8 @@ export const styles = String.raw`
   --warn:      #f0c060;
   --danger:    #ff8a7a;
 
+  --pulse:       rgba(95,200,255,.55);
+  --pulse-out:   rgba(95,200,255,0);
   --danger-line: #6b3227;
   --danger-bg:   #40201b;
   --ok-line:     #2c5c4a;
@@ -66,6 +68,8 @@ export const styles = String.raw`
     --warn:      #8a6410;
     --danger:    #a8341f;
 
+    --pulse:       rgba(11,110,168,.45);
+    --pulse-out:   rgba(11,110,168,0);
     --danger-line: #e0b4a9;
     --danger-bg:   #f7e2dc;
     --ok-line:     #a9d5c2;
@@ -259,9 +263,9 @@ textarea { width: 100%; resize: vertical; font-family: var(--sans); }
 
 /* ---------- live view ---------- */
 .watchbar { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--line); background: var(--surface); flex-wrap: wrap; }
-.livedot { width: 7px; height: 7px; border-radius: 50%; background: var(--working); flex: none; box-shadow: 0 0 0 0 rgba(95,200,255,.55); animation: pulse 2s ease-out infinite; }
+.livedot { width: 7px; height: 7px; border-radius: 50%; background: var(--working); flex: none; box-shadow: 0 0 0 0 var(--pulse); animation: pulse 2s ease-out infinite; }
 .livedot[data-idle=true] { background: var(--text-3); animation: none; }
-@keyframes pulse { 70% { box-shadow: 0 0 0 6px rgba(95,200,255,0); } 100% { box-shadow: 0 0 0 0 rgba(95,200,255,0); } }
+@keyframes pulse { 70% { box-shadow: 0 0 0 6px var(--pulse-out); } 100% { box-shadow: 0 0 0 0 var(--pulse-out); } }
 .watchbar .lbl { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--working); }
 .watchbar .ro { font-size: 11px; color: var(--text-3); max-width: 62ch; }
 .watchgrid { display: grid; grid-template-columns: minmax(0,1fr) 400px; gap: 1px; background: var(--line); flex: 1; min-height: 0; }
