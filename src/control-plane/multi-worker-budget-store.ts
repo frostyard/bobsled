@@ -7,6 +7,7 @@ import { dataPath } from '../paths.ts';
 import { MultiWorkerPolicySchema, RepositoryPolicySnapshotSchema } from './contracts.ts';
 import { ensureMultiWorkerParentSchema } from './multi-worker-parent-store.ts';
 import { WorkPlanTaskIdSchema } from './work-plan-contracts.ts';
+import { claimOrganizationCapacity, ensureOrganizationCapacityClaimSchema, releaseOrganizationCapacity } from './organization-capacity-claim-store.ts';
 
 export const InferenceProviderSchema = v.picklist(['openai-codex', 'github-copilot']);
 
@@ -69,6 +70,7 @@ function hash(value: unknown): string {
 
 export function ensureMultiWorkerBudgetSchema(db: Database.Database): void {
 	ensureMultiWorkerParentSchema(db);
+	ensureOrganizationCapacityClaimSchema(db);
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS multi_worker_budgets (
 			plan_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, policy_json TEXT NOT NULL,
@@ -204,6 +206,9 @@ export class MultiWorkerBudgetStore {
 				return this.getAttempt(attemptId, ownerId);
 			}
 			const timestamp = this.#now().toISOString();
+			const parent = this.#db.prepare(`SELECT jobs.repository_id FROM multi_worker_plans JOIN jobs ON jobs.id=multi_worker_plans.job_id WHERE multi_worker_plans.id=?`).get(attempt.planId) as { repository_id: string } | undefined;
+			if (!parent) throw new MultiWorkerBudgetConflictError('Multi-worker attempt lost its repository parent');
+			claimOrganizationCapacity(this.#db, { sourceKind: 'multi_worker_attempt', sourceId: attemptId, ownerId, repositoryId: parent.repository_id, slots: attempt.provider === 'openai-codex' ? { openaiCodex: 1, githubCopilot: 0 } : { openaiCodex: 0, githubCopilot: 1 } }, this.#now());
 			const changed = this.#db.prepare(`UPDATE multi_worker_budget_attempts SET status = 'running', model_calls = 1, started_at = ?
 				WHERE id = ? AND owner_id = ? AND status = 'preparing' AND model_calls = 0`).run(timestamp, attemptId, ownerId);
 			if (changed.changes !== 1) throw new MultiWorkerBudgetConflictError('Model dispatch was claimed concurrently');
@@ -261,6 +266,7 @@ export class MultiWorkerBudgetStore {
 			const changed = this.#db.prepare(`UPDATE multi_worker_budget_attempts SET status = ?, finished_at = ?, reason = ?
 				WHERE id = ? AND owner_id = ? AND status = ? AND model_calls = ?`).run(status, timestamp, reason ?? null, attemptId, ownerId, expectedStatus, expectedCalls);
 			if (changed.changes !== 1) throw new MultiWorkerBudgetConflictError('Budget attempt was settled concurrently');
+			if (expectedCalls === 1) releaseOrganizationCapacity(this.#db, 'multi_worker_attempt', attemptId, `multi_worker.${status}`, this.#now());
 			return this.getAttempt(attemptId, ownerId);
 		}).immediate();
 	}

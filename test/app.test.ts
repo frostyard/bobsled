@@ -249,6 +249,7 @@ test('reports bounded fleet workload, quota, and retention metadata without exec
 	const view = await response.json() as Record<string, any>;
 	assert.equal(typeof view.organization.concurrencyLimitConfigured, 'boolean');
 	assert.equal(view.organization.enforcementMode, 'disabled');
+	assert.deepEqual(Object.keys(view.organization.capacityUsage).sort(), ['activeWorkflows','providerCalls','wouldExceedPolicyClaims']);
 	assert.equal(Array.isArray(view.repositories), true);
 	assert.equal(view.repositories.length, 3);
 	assert.equal(view.observability.retentionMode, 'indefinite');
