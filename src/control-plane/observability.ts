@@ -34,6 +34,25 @@ interface ObservationCountRow {
 	count: number;
 }
 
+interface ActivityRow {
+	id: number;
+	conversation_id: string | null;
+	agent_name: string | null;
+	event_type: string;
+	event_timestamp: string;
+	payload_json: string;
+}
+
+/** One recorded step of agent work, projected for the live view. */
+export interface ActivityEvent {
+	id: number;
+	conversationId: string;
+	agentName?: string;
+	type: string;
+	at: string;
+	payload: Record<string, unknown>;
+}
+
 /**
  * Makes a stable diagnostic JSON projection while preserving values JSON normally
  * loses. The authoritative payload is also retained as a Node V8 serialization.
@@ -190,6 +209,37 @@ export class FlueObservationStore {
 		this.#db.transaction(() => {
 			for (const item of batch) this.record(item.observation, item.context, item.recordedAt);
 		})();
+	}
+
+	/**
+	 * Reads back the observations already captured for one unit of agent work,
+	 * so an operator can watch it happen instead of only seeing the outcome.
+	 *
+	 * Conversation ids are deterministic per worker (`implementation-<attemptId>`,
+	 * `review-<reviewId>-...`), so a caller identifies a run's work by prefix.
+	 * This is a read-only projection: it starts nothing, claims nothing, and
+	 * spends no subscription call.
+	 */
+	activity(prefixes: readonly string[], afterId = 0, limit = 400): ActivityEvent[] {
+		const wanted = prefixes.filter((prefix) => prefix.length > 0 && prefix.length <= 200);
+		if (!wanted.length) return [];
+		// LIKE 'prefix%' with no other wildcards stays on the conversation index.
+		const clause = wanted.map(() => 'conversation_id LIKE ? ESCAPE \'\\\'').join(' OR ');
+		const rows = this.#db.prepare(`SELECT id, conversation_id, agent_name, event_type, event_timestamp, payload_json
+			FROM flue_observations WHERE id > ? AND (${clause}) AND event_type IN ('tool_start','tool','text','log','agent_start','agent_end','submission_settled')
+			ORDER BY id LIMIT ?`).all(afterId, ...wanted.map((prefix) => `${prefix.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`), Math.min(Math.max(limit, 1), 1_000)) as ActivityRow[];
+		return rows.map((row) => {
+			let payload: Record<string, unknown> = {};
+			try { payload = JSON.parse(row.payload_json) as Record<string, unknown>; } catch { payload = {}; }
+			return {
+				id: row.id,
+				conversationId: row.conversation_id ?? '',
+				agentName: row.agent_name ?? undefined,
+				type: row.event_type,
+				at: row.event_timestamp,
+				payload,
+			};
+		});
 	}
 
 	metrics(): ObservationMetrics {

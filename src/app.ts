@@ -34,7 +34,7 @@ import { IntakeBriefSnapshotConflictError, IntakeBriefSnapshotForbiddenError, In
 import { IntakeSnapshotTriageConflictError, IntakeSnapshotTriageForbiddenError, IntakeSnapshotTriageNotFoundError, IntakeSnapshotTriageStore } from './control-plane/intake-snapshot-triage-store.ts';
 import { IntakeSnapshotTriageService } from './control-plane/intake-snapshot-triage-service.ts';
 import { IntakeSnapshotRunAdmissionConflictError, IntakeSnapshotRunAdmissionForbiddenError, IntakeSnapshotRunAdmissionNotFoundError, IntakeSnapshotRunAdmissionService, IntakeSnapshotRunAdmissionStore } from './control-plane/intake-snapshot-run-admission-store.ts';
-import { controlPlaneHtml } from './control-plane/ui.ts';
+import { controlPlaneHtml } from './control-plane/ui/index.ts';
 import { projectOperatorBoard } from './control-plane/operator-board-view.ts';
 import { MultiWorkerOperatorStore } from './control-plane/multi-worker-operator-view.ts';
 import {
@@ -82,6 +82,8 @@ const app = new Hono<{ Variables: { principal: OperatorPrincipal | typeof localP
 const localPrincipal = { id: 'local-operator' } as const;
 const sessionCookie = '__Host-bobsled-session';
 const oauthStateCookie = '__Host-bobsled-oauth-state';
+/** The operator screens, which are HTML; everything else under /api is JSON. */
+const interfacePaths = /^\/(?:$|intake$|activity$|access$|change-sets$|runs\/[^/]+(?:\/live)?$)/;
 const intakeConversations = new IntakeConversationStore();
 const intakeRevisions = new IntakeConversationRevisionStore(undefined, undefined, intakeConversations);
 const intakeRevisionService = new IntakeConversationRevisionService(intakeRevisions);
@@ -112,7 +114,9 @@ app.use('*', async (context, next) => {
 	if (!configuration) return context.json({ error: 'GitHub operator authentication is unavailable' }, 503);
 	const principal = operatorSessionStore.resolve(getCookie(context, sessionCookie), configuration.sessionSecret);
 	if (!principal) {
-		if (context.req.path === '/') return context.redirect('/auth/github/login', 302);
+		// A browser asking for an operator screen is sent to sign in; an API
+		// caller gets a status it can act on.
+		if (interfacePaths.test(context.req.path)) return context.redirect('/auth/github/login', 302);
 		return context.json({ error: 'Authentication required' }, 401);
 	}
 	if (!requestOriginAllowed(context.req.raw, configuration)) return context.json({ error: 'Request origin is not allowed' }, 403);
@@ -180,12 +184,22 @@ if (githubWebhookSecret) {
 	app.post('/channels/github/webhook', (context) => context.json({ error: 'GitHub webhooks are not configured' }, 503));
 }
 
-app.get('/', (context) => {
-	const principal = context.get('principal');
-	return context.html(controlPlaneHtml('login' in principal
+function operatorInterfaceHtml(principal: OperatorPrincipal | typeof localPrincipal): string {
+	return controlPlaneHtml('login' in principal
 		? { provider: 'github', login: principal.login }
-		: { provider: 'local' }));
-});
+		: { provider: 'local' });
+}
+
+// Every operator surface is one document; the client reads location.pathname.
+// Listing the paths explicitly keeps an unknown address a 404 rather than
+// silently serving the interface for anything at all.
+app.get('/', (context) => context.html(operatorInterfaceHtml(context.get('principal'))));
+app.get('/intake', (context) => context.html(operatorInterfaceHtml(context.get('principal'))));
+app.get('/activity', (context) => context.html(operatorInterfaceHtml(context.get('principal'))));
+app.get('/access', (context) => context.html(operatorInterfaceHtml(context.get('principal'))));
+app.get('/change-sets', (context) => context.html(operatorInterfaceHtml(context.get('principal'))));
+app.get('/runs/:runId', (context) => context.html(operatorInterfaceHtml(context.get('principal'))));
+app.get('/runs/:runId/live', (context) => context.html(operatorInterfaceHtml(context.get('principal'))));
 
 app.get('/api/repositories', (context) => context.json(repositories));
 app.get('/api/github-app/status', (context) => context.json({ ...githubAppStatus(), webhooks: githubEventStore.metrics() }));
@@ -369,6 +383,32 @@ app.get('/api/operator-board', (context) => {
 app.get('/api/runs/:runId', (context) => {
 	try {
 		return context.json(jobLedger.get(context.req.param('runId'), context.get('principal')));
+	} catch (error) {
+		return ledgerError(context, error);
+	}
+});
+
+/**
+ * Read-only live activity for one run: the Flue observations already recorded
+ * for its implementation, review, and remediation workers.
+ *
+ * Watching is not steering. This route starts nothing, claims nothing, spends
+ * no subscription call, and offers no way to reach into a running attempt --
+ * every bound downstream of a run assumes nobody did.
+ */
+app.get('/api/runs/:runId/activity', (context) => {
+	try {
+		const run = jobLedger.get(context.req.param('runId'), context.get('principal'));
+		const job = run.jobs[0];
+		const prefixes = job
+			? [
+				...job.attempts.map((attempt) => `implementation-${attempt.id}`),
+				...job.reviews.flatMap((review) => [`review-${review.id}-`, `remediation-${review.id}-`]),
+			]
+			: [];
+		const after = Number.parseInt(context.req.query('after') ?? '0', 10);
+		const events = flueObservationStore.activity(prefixes, Number.isFinite(after) && after > 0 ? after : 0);
+		return context.json({ runId: run.id, status: run.status, events });
 	} catch (error) {
 		return ledgerError(context, error);
 	}
