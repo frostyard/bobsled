@@ -62,7 +62,7 @@ export const MultiRepositoryCompatibilityExecutionSchema = v.object({
 	commandsStarted: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(120)),
 	authorizationSha256: Sha256Schema,
 	gateSetSha256: Sha256Schema,
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	createdAt: v.string(),
 	startedAt: v.optional(v.string()),
 	finishedAt: v.optional(v.string()),
@@ -79,7 +79,7 @@ export const MultiRepositoryCompatibilityExecutionSchema = v.object({
 
 const ReserveSchema = v.object({
 	authorizationId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type MultiRepositoryCompatibilityManifest = v.InferOutput<typeof MultiRepositoryCompatibilityManifestSchema>;

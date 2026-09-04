@@ -6,7 +6,7 @@ const DigestSchema = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/));
 
 export const PublicationRebaseRequestSchema = v.object({
 	sourcePublicationId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export const PublicationRebaseBlockReasonSchema = v.picklist([

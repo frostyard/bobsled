@@ -54,13 +54,13 @@ export const MultiRepositoryVerificationPlanSchema = v.object({
 	memberEvidenceSha256: Sha256Schema,
 	resultSha256: Sha256Schema,
 	result: MultiRepositoryVerificationPlanResultSchema,
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	createdAt: v.string(),
 });
 
 const AdmitSchema = v.object({
 	scheduleId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type MultiRepositoryVerificationPlan = v.InferOutput<typeof MultiRepositoryVerificationPlanSchema>;

@@ -29,7 +29,7 @@ export const MultiRepositoryPublicationRecoveryExecutionSchema = v.object({
 	changeSetId: v.pipe(v.string(), v.uuid()), ownerId: v.pipe(v.string(), v.minLength(1)),
 	status: v.picklist(['reserved', 'prepared', 'running', 'succeeded', 'partial', 'blocked', 'failed']),
 	publicationsStarted: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(16)), recoveryPlanSha256: Sha256Schema,
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)), createdAt: v.string(), startedAt: v.optional(v.string()), finishedAt: v.optional(v.string()),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)), createdAt: v.string(), startedAt: v.optional(v.string()), finishedAt: v.optional(v.string()),
 	snapshot: v.optional(SnapshotSchema), result: v.optional(ResultSchema), retryExecutionAuthorized: v.boolean(),
 	mergeAuthorized: v.literal(false), rollbackAuthorized: v.literal(false),
 });
@@ -40,7 +40,7 @@ export class MultiRepositoryPublicationRecoveryExecutionConflictError extends Er
 export class MultiRepositoryPublicationRecoveryExecutionForbiddenError extends Error {}
 export class MultiRepositoryPublicationRecoveryExecutionNotFoundError extends Error {}
 
-const ReserveSchema = v.object({ recoveryPlanId: v.pipe(v.string(), v.uuid()), reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)) });
+const ReserveSchema = v.object({ recoveryPlanId: v.pipe(v.string(), v.uuid()), reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)) });
 interface Row { id:string; recovery_plan_id:string; source_execution_id:string; change_set_id:string; owner_id:string; idempotency_key:string; request_sha256:string; recovery_plan_sha256:string; reason:string; status:string; publications_started:number; created_at:string; started_at:string|null; finished_at:string|null; result_sha256:string|null; result_json:string|null }
 interface PreflightRow { snapshot_sha256:string; snapshot_json:string }
 function canonical(value:unknown):unknown { if(Array.isArray(value)) return value.map(canonical); if(value&&typeof value==='object') return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,item])=>[k,canonical(item)])); return value; }

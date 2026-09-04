@@ -13,13 +13,13 @@ import type { Principal } from './ledger.ts';
 import { getRepository } from './repositories.ts';
 
 const Sha256Schema=v.pipe(v.string(),v.regex(/^[a-f0-9]{64}$/));
-const ReserveSchema=v.object({snapshotId:v.pipe(v.string(),v.uuid()),reason:v.pipe(v.string(),v.minLength(10),v.maxLength(2_000))});
+const ReserveSchema=v.object({snapshotId:v.pipe(v.string(),v.uuid()),reason:v.pipe(v.string(),v.minLength(1),v.maxLength(2_000))});
 export const IntakeSnapshotTriageInitialDataSchema=v.object({snapshotId:v.pipe(v.string(),v.uuid()),briefSha256:Sha256Schema,brief:IntakeBriefSchema,repository:RepositoryContractSchema});
 export type IntakeSnapshotTriageInitialData=v.InferOutput<typeof IntakeSnapshotTriageInitialDataSchema>;
 export const IntakeSnapshotTriageCandidateSchema=v.object({decision:TriageDecisionSchema,text:v.pipe(v.string(),v.maxLength(20_000)),agentConversationId:v.pipe(v.string(),v.minLength(1),v.maxLength(500)),agentSubmissionId:v.pipe(v.string(),v.minLength(1),v.maxLength(500))});
 export type IntakeSnapshotTriageCandidate=v.InferOutput<typeof IntakeSnapshotTriageCandidateSchema>;
 const ResultSchema=v.object({...IntakeSnapshotTriageCandidateSchema.entries,snapshotId:v.pipe(v.string(),v.uuid()),briefSha256:Sha256Schema,modelCalls:v.literal(1),runAdmissionAuthorized:v.literal(false),githubMutationAuthorized:v.literal(false)});
-export const IntakeSnapshotTriageSchema=v.object({id:v.pipe(v.string(),v.uuid()),snapshotId:v.pipe(v.string(),v.uuid()),ownerId:v.pipe(v.string(),v.minLength(1),v.maxLength(500)),briefSha256:Sha256Schema,status:v.picklist(['reserved','running','succeeded','blocked','failed']),modelCalls:v.pipe(v.number(),v.integer(),v.minValue(0),v.maxValue(1)),reason:v.pipe(v.string(),v.minLength(10),v.maxLength(2_000)),error:v.optional(v.pipe(v.string(),v.minLength(1),v.maxLength(4_000))),result:v.optional(ResultSchema),supersedesTriageId:v.optional(v.pipe(v.string(),v.uuid())),modelCallAuthorized:v.boolean(),runAdmissionAuthorized:v.literal(false),githubMutationAuthorized:v.literal(false),createdAt:v.string(),startedAt:v.optional(v.string()),finishedAt:v.optional(v.string())});
+export const IntakeSnapshotTriageSchema=v.object({id:v.pipe(v.string(),v.uuid()),snapshotId:v.pipe(v.string(),v.uuid()),ownerId:v.pipe(v.string(),v.minLength(1),v.maxLength(500)),briefSha256:Sha256Schema,status:v.picklist(['reserved','running','succeeded','blocked','failed']),modelCalls:v.pipe(v.number(),v.integer(),v.minValue(0),v.maxValue(1)),reason:v.pipe(v.string(),v.minLength(1),v.maxLength(2_000)),error:v.optional(v.pipe(v.string(),v.minLength(1),v.maxLength(4_000))),result:v.optional(ResultSchema),supersedesTriageId:v.optional(v.pipe(v.string(),v.uuid())),modelCallAuthorized:v.boolean(),runAdmissionAuthorized:v.literal(false),githubMutationAuthorized:v.literal(false),createdAt:v.string(),startedAt:v.optional(v.string()),finishedAt:v.optional(v.string())});
 export type IntakeSnapshotTriage=v.InferOutput<typeof IntakeSnapshotTriageSchema>;
 export class IntakeSnapshotTriageConflictError extends Error{}
 export class IntakeSnapshotTriageForbiddenError extends Error{}

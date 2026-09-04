@@ -3,7 +3,7 @@ import * as v from 'valibot';
 export const PublicationRecoveryResolutionRequestSchema = v.object({
 	sourcePublicationId: v.pipe(v.string(), v.uuid()),
 	supersedingPublicationId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export const PublicationRecoveryResolutionRecordSchema = v.object({

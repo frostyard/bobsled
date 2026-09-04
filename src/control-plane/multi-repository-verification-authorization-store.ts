@@ -34,7 +34,7 @@ export const MultiRepositoryVerificationAuthorizationSchema = v.object({
 	verificationPlanSha256: Sha256Schema,
 	gateSetSha256: Sha256Schema,
 	gates: v.pipe(v.array(MultiRepositoryAuthorizedCompatibilityGateSchema), v.minLength(1), v.maxLength(120)),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	compatibilityExecutionAuthorized: v.literal(true),
 	workspaceMutationAuthorized: v.literal(false),
 	modelDispatchAuthorized: v.literal(false),
@@ -46,7 +46,7 @@ export const MultiRepositoryVerificationAuthorizationSchema = v.object({
 
 const AuthorizeSchema = v.object({
 	verificationPlanId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type MultiRepositoryVerificationAuthorization = v.InferOutput<typeof MultiRepositoryVerificationAuthorizationSchema>;

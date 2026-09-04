@@ -67,21 +67,21 @@ test('reads back one run\'s agent work by conversation prefix without exposing a
 	const directory = mkdtempSync(join(tmpdir(), 'bobsled-activity-'));
 	const path = join(directory, 'telemetry.db');
 	const at = '2026-09-01T12:00:00.000Z';
-	const event = (index: number, conversationId: string, extra: Record<string, unknown> = {}) => ({
+	const event = (index: number, extra: Record<string, unknown> = {}) => ({
 		v: 3, eventIndex: index, timestamp: at, type: 'tool_start',
 		toolName: 'read', toolCallId: 'tool-' + index, instanceId: 'instance-1',
-		conversationId, origin: 'model', description: 'Read a file', args: { path: 'src/a.ts' },
+		conversationId: `conv-generated-${index}`, origin: 'model', description: 'Read a file', args: { path: 'src/a.ts' },
 		...extra,
 	}) as FlueObservation;
 	try {
 		const store = new FlueObservationStore(path, () => new Date(at), 'process-1');
-		const context = { id: 'instance-1', agentName: 'implementation-worker' };
-		store.record(event(1, 'implementation-attempt-1'), context);
-		store.record(event(2, 'review-review-1-1-abc'), context);
-		store.record(event(3, 'remediation-review-1-xyz'), context);
-		store.record(event(4, 'implementation-attempt-OTHER'), context);
+		const context = (id: string) => ({ id, agentName: 'implementation-worker' });
+		store.record(event(1), context('implementation-attempt-1'));
+		store.record(event(2), context('review-review-1-1-abc'));
+		store.record(event(3), context('remediation-review-1-xyz'));
+		store.record(event(4), context('implementation-attempt-OTHER'));
 		// A conversation belonging to an unrelated run must never come back.
-		store.record(event(5, 'triage-unrelated'), context);
+		store.record(event(5), context('triage-unrelated'));
 
 		const mine = store.activity(['implementation-attempt-1', 'review-review-1-', 'remediation-review-1-']);
 		assert.deepEqual(mine.map((entry) => entry.conversationId), [

@@ -281,13 +281,13 @@ test('confirming sends the reason the operator typed', async () => {
 	await harness.flush();
 	const sheet = harness.sheet()!;
 	const reason = sheet.querySelector('#sheet-reason')!;
-	reason.value = 'Looks straightforward.';
+	reason.value = 'LGTM';
 	sheet.querySelectorAll('.btn').find((node) => node.textContent === 'Start work')!.dispatch('click');
 	await harness.flush();
 
 	const executed = harness.calls.find((call) => call.url.includes('/execute'));
 	assert.ok(executed, 'confirming must run the action');
-	assert.equal((executed.body as { reason: string }).reason, 'Looks straightforward.');
+	assert.equal((executed.body as { reason: string }).reason, 'LGTM');
 	assert.equal((executed.body as { expectedVersion: number }).expectedVersion, 3);
 });
 

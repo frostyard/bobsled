@@ -62,14 +62,14 @@ export const MultiRepositoryPublicationRecoveryPlanSchema = v.object({
 	authorizationId: v.pipe(v.string(), v.uuid()),
 	changeSetId: v.pipe(v.string(), v.uuid()),
 	ownerId: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 	result: MultiRepositoryPublicationRecoveryResultSchema,
 	createdAt: v.string(),
 });
 
 const RequestSchema = v.object({
 	sourceExecutionId: v.pipe(v.string(), v.uuid()),
-	reason: v.pipe(v.string(), v.minLength(10), v.maxLength(2_000)),
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
 });
 
 export type MultiRepositoryPublicationRecoveryPlan = v.InferOutput<typeof MultiRepositoryPublicationRecoveryPlanSchema>;
