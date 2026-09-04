@@ -56,13 +56,18 @@ async function accessSurface(surface) {
   }
 
   body.append(el('div', { class: 'subhead', text: 'Repositories' }));
+  body.append(el('div', { class: 'btnrow' }, [el('button', { class: 'btn', text: 'Check repository drift', onclick: async () => {
+    try { await post('/api/repositories/drift/check', {}); toast('Repository drift observations recorded.'); render(); }
+    catch (error) { fail(error, body); }
+  } })]));
   const grid = el('div', { style: 'display:grid;gap:8px' });
   const managedRepositories = enrollments.length ? enrollments : state.repositories.map((repository) => ({ repository: repository, version: 1 }));
   for (const enrollment of managedRepositories) {
     const repository = enrollment.repository;
     const drift = repositoryDrift && repositoryDrift.find((entry) => entry.repositoryId === repository.id);
     const driftLabel = !drift ? 'not checked' : drift.status === 'aligned' ? 'aligned' : drift.status === 'drifted' ? 'drift found' : 'unavailable';
-    const detail = !drift || !drift.findings.length ? '' : ' · ' + drift.findings.map((finding) => finding.kind.replace(/_/g, ' ')).join(', ');
+    const impact = drift && drift.policyImpact && drift.policyImpact.changedOpenRunCount ? ' · ' + drift.policyImpact.changedOpenRunCount + ' open run' + (drift.policyImpact.changedOpenRunCount === 1 ? '' : 's') + ' use older policy' : '';
+    const detail = (!drift || !drift.findings.length ? '' : ' · ' + drift.findings.map((finding) => finding.kind.replace(/_/g, ' ')).join(', ')) + impact;
     const controls = [];
     if (repository.enabled !== false) controls.push(el('button', { class: 'btn', text: 'Disable', onclick: async () => {
       const decision = await authorize('disable_repository', { subject: repository.id });
