@@ -247,11 +247,26 @@ test('reports bounded fleet workload, quota, and retention metadata without exec
 	const response = await app.request('/api/operations/fleet');
 	assert.equal(response.status, 200);
 	const view = await response.json() as Record<string, any>;
-	assert.equal(view.organization.concurrencyLimitConfigured, false);
+	assert.equal(typeof view.organization.concurrencyLimitConfigured, 'boolean');
+	assert.equal(view.organization.enforcementMode, 'disabled');
 	assert.equal(Array.isArray(view.repositories), true);
 	assert.equal(view.repositories.length, 3);
 	assert.equal(view.observability.retentionMode, 'indefinite');
 	for (const forbidden of ['token','credential','payload','events']) assert.equal(forbidden in view, false);
+});
+
+test('records organization capacity policy without activating enforcement', async () => {
+	const before = await (await app.request('/api/operations/fleet')).json() as Record<string, any>;
+	const expectedVersion = before.organization.capacityPolicy?.version ?? 0;
+	const response = await app.request('/api/operations/capacity-policy', {
+		method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `capacity-${randomUUID()}` },
+		body: JSON.stringify({ policy: { maxActiveWorkflows: 4, providerConcurrentCalls: { openaiCodex: 2, githubCopilot: 1 } }, expectedVersion, reason: 'Bound fleet subscription concurrency' }),
+	});
+	assert.equal(response.status, 201);
+	const after = await (await app.request('/api/operations/fleet')).json() as Record<string, any>;
+	assert.equal(after.organization.concurrencyLimitConfigured, true);
+	assert.equal(after.organization.enforcementMode, 'disabled');
+	assert.equal(after.organization.capacityPolicy.version, expectedVersion + 1);
 });
 
 test('admits GitHub issue actions as blocked evidence while repository writes are disabled', async () => {

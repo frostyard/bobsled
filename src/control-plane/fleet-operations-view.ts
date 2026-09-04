@@ -2,13 +2,20 @@ import Database from 'better-sqlite3';
 import * as v from 'valibot';
 import { dataPath } from '../paths.ts';
 import { RepositoryContractSchema, RepositoryPolicySnapshotSchema } from './contracts.ts';
+import type { OrganizationCapacityPolicyRecord } from './organization-capacity-policy-store.ts';
 
 const CountSchema = v.pipe(v.number(), v.integer(), v.minValue(0));
 const WorkloadSchema = v.object({ pendingRuns: CountSchema, activeRuns: CountSchema, activeAttempts: CountSchema, activeReviews: CountSchema, activePublications: CountSchema });
 const MultiWorkerQuotaSchema = v.object({ activePlans: CountSchema, activeAttempts: CountSchema, workerAttempts: v.object({ used: CountSchema, declared: CountSchema }), subscriptionCalls: v.object({ openaiCodex: v.object({ used: CountSchema, declared: CountSchema }), githubCopilot: v.object({ used: CountSchema, declared: CountSchema }) }) });
 export const FleetOperationsViewSchema = v.object({
 	generatedAt: v.string(),
-	organization: v.object({ workload: WorkloadSchema, concurrencyLimitConfigured: v.literal(false), multiWorkerQuota: MultiWorkerQuotaSchema }),
+	organization: v.object({
+		workload: WorkloadSchema,
+		concurrencyLimitConfigured: v.boolean(),
+		enforcementMode: v.literal('disabled'),
+		capacityPolicy: v.optional(v.object({ version: CountSchema, maxActiveWorkflows: CountSchema, providerConcurrentCalls: v.object({ openaiCodex: CountSchema, githubCopilot: CountSchema }) })),
+		multiWorkerQuota: MultiWorkerQuotaSchema,
+	}),
 	repositories: v.array(v.object({ repositoryId: RepositoryContractSchema.entries.id, enabled: v.boolean(), workload: WorkloadSchema, multiWorkerQuota: MultiWorkerQuotaSchema })),
 	observability: v.object({ events: CountSchema, storedBytes: CountSchema, oldestObservedAt: v.optional(v.string()), lastObservedAt: v.optional(v.string()), retentionMode: v.literal('indefinite') }),
 });
@@ -35,7 +42,7 @@ export class FleetOperationsProjector {
 		return this.#db;
 	}
 
-	project(input: readonly unknown[]): FleetOperationsView {
+	project(input: readonly unknown[], capacity?: OrganizationCapacityPolicyRecord): FleetOperationsView {
 		const repositories = input.map((repository) => v.parse(RepositoryPolicySnapshotSchema, repository));
 		const db = this.#database();
 		return db.transaction(() => {
@@ -65,7 +72,10 @@ export class FleetOperationsProjector {
 				quotaByRepository.set(row.repository_id, quota);
 			}
 			const projected = repositories.map((repository) => ({ repositoryId: repository.id, enabled: repository.enabled, workload: workloadByRepository.get(repository.id) ?? zeroWorkload(), multiWorkerQuota: quotaByRepository.get(repository.id) ?? zeroQuota() }));
-			const organization = { workload: zeroWorkload(), concurrencyLimitConfigured: false as const, multiWorkerQuota: zeroQuota() };
+			const organization = {
+				workload: zeroWorkload(), concurrencyLimitConfigured: capacity !== undefined, enforcementMode: 'disabled' as const,
+				capacityPolicy: capacity && { version: capacity.version, ...capacity.policy }, multiWorkerQuota: zeroQuota(),
+			};
 			for (const repository of projected) {
 				for (const key of Object.keys(organization.workload) as Array<keyof typeof organization.workload>) organization.workload[key] += repository.workload[key];
 				organization.multiWorkerQuota.activePlans += repository.multiWorkerQuota.activePlans; organization.multiWorkerQuota.activeAttempts += repository.multiWorkerQuota.activeAttempts;
