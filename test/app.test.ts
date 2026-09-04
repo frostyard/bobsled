@@ -52,6 +52,18 @@ test('lists only enrolled repositories and exposes their bounded policies', asyn
 	assert.equal(website?.capabilities.writeGitHub, true);
 });
 
+test('reports bounded repository drift without exposing installation authority', async () => {
+	const response = await app.request('/api/repositories/drift');
+	assert.equal(response.status, 200);
+	const records = await response.json() as Array<Record<string, unknown>>;
+	assert.equal(records.length, 3);
+	for (const record of records) {
+		assert.equal(record.status, 'unavailable');
+		assert.deepEqual(record.findings, [{ kind: 'unreachable' }]);
+		for (const forbidden of ['token', 'permissions', 'githubRepositoryId', 'error']) assert.equal(forbidden in record, false);
+	}
+});
+
 test('serves the operator interface', async () => {
 	const response = await app.request('/');
 	assert.equal(response.status, 200);

@@ -9,10 +9,11 @@ async function accessSurface(surface) {
     body,
   ]));
 
-  const [authority, status, observability] = await Promise.all([
+  const [authority, status, observability, repositoryDrift] = await Promise.all([
     json('/api/github-app/authority').catch((error) => ({ error: message(error) })),
     json('/api/github-app/status').catch(() => undefined),
     json('/api/observability/status').catch(() => undefined),
+    json('/api/repositories/drift').catch(() => undefined),
   ]);
 
   if (authority.error) {
@@ -56,9 +57,12 @@ async function accessSurface(surface) {
   body.append(el('div', { class: 'subhead', text: 'Repositories' }));
   const grid = el('div', { style: 'display:grid;gap:8px' });
   for (const repository of state.repositories) {
+    const drift = repositoryDrift && repositoryDrift.find((entry) => entry.repositoryId === repository.id);
+    const driftLabel = !drift ? 'not checked' : drift.status === 'aligned' ? 'aligned' : drift.status === 'drifted' ? 'drift found' : 'unavailable';
+    const detail = !drift || !drift.findings.length ? '' : ' · ' + drift.findings.map((finding) => finding.kind.replace(/_/g, ' ')).join(', ');
     grid.append(el('div', { class: 'filerow' }, [
       el('span', { text: repository.id }),
-      el('span', { class: 'pm', text: repository.readOnly ? 'read only' : 'can write' }),
+      el('span', { class: 'pm', text: (repository.readOnly ? 'read only' : 'can write') + ' · ' + driftLabel + detail }),
     ]));
   }
   body.append(grid);

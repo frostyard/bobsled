@@ -26,6 +26,7 @@ import {
 	LedgerNotFoundError,
 } from './control-plane/ledger.ts';
 import { getRepository, repositories } from './control-plane/repositories.ts';
+import { repositoryDriftService } from './control-plane/repository-drift.ts';
 import { triageWorkItem } from './control-plane/triage-service.ts';
 import { IntakeConversationConflictError, IntakeConversationForbiddenError, IntakeConversationNotFoundError, IntakeConversationStore } from './control-plane/intake-conversation-store.ts';
 import { IntakeConversationRevisionConflictError, IntakeConversationRevisionForbiddenError, IntakeConversationRevisionNotFoundError, IntakeConversationRevisionStore } from './control-plane/intake-conversation-revision-store.ts';
@@ -207,6 +208,8 @@ app.get('/runs/:runId', (context) => context.html(operatorInterfaceHtml(context.
 app.get('/runs/:runId/live', (context) => context.html(operatorInterfaceHtml(context.get('principal'))));
 
 app.get('/api/repositories', (context) => context.json(repositories));
+
+app.get('/api/repositories/drift', async (context) => context.json(await repositoryDriftService.inspectAll()));
 app.get('/api/github-app/status', (context) => context.json({ ...githubAppStatus(), webhooks: githubEventStore.metrics() }));
 app.get('/api/github-app/authority', (context) => context.json(auditGitHubPermissions(githubEventStore.latestInstallationSnapshot())));
 app.get('/api/operator-auth/status', (context) => context.json(operatorAuthStatus()));

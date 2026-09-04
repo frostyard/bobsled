@@ -180,7 +180,7 @@ Migration 39 makes the first recovery decision explicit without performing anoth
 
 Migration 40 closes the recovery boundary. A retry execution first requires every publication status, attempt count, pull identity, and URL to match the immutable plan snapshot. One atomic claim then retries only the dependency-ordered failed/pending suffix through the existing draft-publication outbox; retained drafts are never called again, every external start is counted first, concurrent observers cannot duplicate work, and ambiguous running execution never retries. Terminal evidence records success, partial progress, policy blockage, or failure while keeping merge and rollback authority false. A mutually exclusive decision record instead preserves exact reverse human rollback guidance or links the source to a distinct same-repository-set change set. Supersession never rewrites the old rollout; human rollback remains unexecuted guidance. Both decisions make zero model calls and zero GitHub mutations. M6 is complete without a merge, close, revert, or deployment API.
 
-### M7 — Conversational intake — `ACTIVE`
+### M7 — Conversational intake — `DONE`
 
 - [x] Add durable, principal-owned intake conversations with bounded turns, idempotent submissions, optimistic concurrency, and explicit terminal states.
 - [x] Pair the chat transcript with a live schema-validated brief containing the selected repository, objective, context, acceptance criteria, constraints, non-goals, assumptions, and unresolved questions.
@@ -188,7 +188,7 @@ Migration 40 closes the recovery boundary. A retry execution first requires ever
 - [x] Run fresh-context triage from the stored snapshot and persist the result against its exact digest; admission references trusted server-side records rather than browser-resubmitted work-item or triage content.
 - [x] Keep repository selection, admission, execution, review recovery, and publication as separate explicit operator actions. The intake model receives no authority to select arbitrary repositories, mutate policy, dispatch workers, spend execution budgets, or perform GitHub writes.
 - [x] Support manual prompts and GitHub issues as conversation seeds while treating all issue, repository, and user text as untrusted data. Any repository research remains bounded and read-only, with no shell, credential, network, or mutation capability.
-- Deliver the first slice for one enrolled repository. Multi-repository conversational planning remains deferred until a separate contract can map an operator-confirmed brief into the existing M6 authorization chain.
+- [x] Deliver the first slice for one enrolled repository. Multi-repository conversational planning remains deferred until a separate contract can map an operator-confirmed brief into the existing M6 authorization chain.
 
 Acceptance target: an authenticated operator can refine one ambiguous request through chat, inspect the evolving structured brief, freeze an immutable intake snapshot, and submit it to independent triage. Repeated or concurrent submissions converge without duplicate model calls or admissions; a finalized conversation cannot alter its snapshot; and no chat action can create a run, workspace, provider claim, branch, or pull request without the existing downstream authorization step.
 
@@ -204,12 +204,23 @@ Migration 45 adds that separate admission boundary without another model call. A
 
 Migration 46 makes correction a new immutable lineage rather than a mutation. An authenticated operator may start a principal-owned correction only from a fully verified finalized snapshot with no run-admission activity. The new active conversation inherits the authenticated source seed, repository, and frozen brief, while a separate digest-bound record retains the source conversation/snapshot and operator reason. A source may have only one active or finalized correction; a cancelled attempt may be explicitly replaced. Admission performs the inverse check in its own immediate transaction, so correction and run creation cannot race into competing truth. Exact replay converges, changed idempotency input, cross-principal access, repository drift, or retained source/link tampering fail closed, and the action grants no model call, triage, run, execution, or GitHub authority.
 
-### M8 — Organization-scale operations — `PLANNED`
+Live acceptance evidence: an authenticated operator revised and finalized a structured brief for `frostyard/frostyard-org`, ran independent snapshot-bound triage, explicitly admitted the resulting work, and followed it through implementation, repository gates, fresh adversarial review, stale-base recovery, draft publication, required Cloudflare checks, and human merge in [frostyard-org PR #9](https://github.com/frostyard/frostyard-org/pull/9). Follow-up hardening accepted concise approval notes, correlated pre-Flue activity, refreshed trusted source state safely, reconciled signed pull-request/check events, and added reversible archival for noisy terminal test runs. No conversational action bypassed the existing execution, review, publication, or human-merge boundaries.
 
-- Scheduled and webhook-triggered maintenance.
-- Repository enrollment and policy drift detection.
-- Fleet concurrency, quotas, observability retention, and operational dashboards.
-- Human approval queues, notifications, and historical reporting.
+### M8 — Organization-scale operations — `ACTIVE`
+
+- [ ] Scheduled and webhook-triggered maintenance.
+  - [ ] Live-prove automatic signed check-run and pull-request lifecycle reconciliation on the next Bobsled-created draft PR.
+- [ ] Repository enrollment and policy drift detection.
+  - [x] Replace source-code runtime authority with a durable, versioned repository-enrollment registry; retain the three reviewed declarations only as one-time migration bootstrap input.
+  - [x] Project each enrolled repository's immutable GitHub identity, canonical name, default branch, active lifecycle, installation access, and current policy fingerprint through a bounded read-only operator check.
+  - [ ] Discover Frostyard repositories through scoped GitHub metadata, import a repository-owned policy declaration, and expose authenticated enroll/disable actions without a deployment.
+  - [ ] Retain versioned enrollment observations and surface policy changes that affect admitted or unattended work.
+- [ ] Fleet concurrency, quotas, observability retention, and operational dashboards.
+- [ ] Human approval queues, notifications, and historical reporting.
+
+Migration 47 replaces the source-code array as runtime enrollment authority. On first application only, it validates and copies the three previously reviewed declarations into a durable current registry plus append-only version-1 bootstrap events, then records the migration so deletion or disablement can never cause the declarations to be silently replayed. Every current record binds the immutable GitHub repository ID, complete validated policy JSON, canonical SHA-256 digest, optimistic version, actor, reason, and timestamp to its retained event. Policy changes use immediate transactions, idempotency keys, immutable identity checks, and compare-and-set versions across processes. Existing services retain one stable in-process array reference populated from SQLite so their policy lookups continue to observe deliberate registry refreshes; direct repository resolution reads the durable current record and fails closed on disabled or tampered evidence. The migration itself grants no browser mutation or GitHub authority.
+
+The first M8 operator projection is observation-only. The authenticated Access surface uses a repository-ID-scoped `metadata:read` installation token to fetch each durably enrolled repository by immutable GitHub ID. Trusted code compares the response with the versioned repository contract and reports `aligned`, `drifted`, or bounded `unavailable` evidence for identity, canonical name, default branch, archived state, and disabled state. It exposes the current policy digest and selected capability flags without returning tokens, permission grants, numeric GitHub IDs, or raw upstream errors. The read creates no enrollment, policy, run, workspace, model, scheduling, or GitHub-write authority.
 
 ## Current safety boundary
 

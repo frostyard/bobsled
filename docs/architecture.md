@@ -19,7 +19,7 @@ Schemas validate both the TypeScript boundary and runtime data. Model decisions 
 
 ## M1 request flow
 
-1. The UI requests repositories from the static enrollment registry.
+1. The UI requests repositories from the durable, versioned enrollment registry.
 2. The read-only GitHub adapter fetches metadata and open issues for an enrolled repository.
 3. The operator selects an issue or enters a local task.
 4. The server validates the intake and binds the enrolled repository contract.
@@ -221,7 +221,9 @@ Local private operation keeps the reversible `local_trusted` principal. When `BO
 
 GitHub user and refresh tokens are never retained. A session principal is `github:<numeric-user-id>` so mutable logins do not define ownership. Existing runs created in `local_trusted` mode retain their historical owner and remain recoverable by returning to that reversible mode; Bobsled does not silently transfer ownership on first login.
 
-Installation authority is separate from operator identity. Octokit's App authentication strategy mints a short-lived token narrowed to the enrolled repository's immutable GitHub database ID and one typed capability profile. Callers receive only a bounded authenticated request closure, never the token. The closure pins the GitHub API origin, overwrites any caller-supplied authorization header, and expires when its callback returns. Typed profiles cover issue metadata, repository reads, draft publication, and check reads. Only `frostyard/frostyard-org` currently permits the draft-publication profile; Bobsled has no merge profile or merge endpoint.
+Installation authority is separate from operator identity. Octokit's App authentication strategy mints a short-lived token narrowed to the enrolled repository's immutable GitHub database ID and one typed capability profile. Callers receive only a bounded authenticated request closure, never the token. The closure pins the GitHub API origin, overwrites any caller-supplied authorization header, and expires when its callback returns. Typed profiles cover repository metadata, issue metadata, repository reads, draft publication, and check reads. Only `frostyard/frostyard-org` currently permits the draft-publication profile; Bobsled has no merge profile or merge endpoint.
+
+Migration 47 replaces the source-code enrollment array with a SQLite registry. The three reviewed repository contracts are parsed only as first-run bootstrap input; one migration transaction records them as immutable version-1 events and current rows, then a migration marker permanently prevents silent reseeding. Current reads verify schema, repository slug, immutable GitHub database ID, and policy digest. Policy revisions are append-only, actor/reason/idempotency bound, optimistic-versioned, and serialized with immediate transactions. Existing service constructors share a stable array populated from the registry, while direct resolution consults durable current state and synchronizes that reference. Browser enrollment remains deliberately absent until scoped GitHub discovery and repository-owned policy import can establish trusted input.
 
 ## Durable GitHub issue actions
 

@@ -20,6 +20,8 @@ M7 begins with a durable conversational-intake envelope. Migration 41 stores one
 
 Authenticated operators can start or resume conversational intake from either a manual task or an enrolled GitHub issue. The UI renders the immutable turn history beside the current structured brief and exposes explicit revise, finalize, superseding-correction, independent-triage, run-admission, and cancel actions. Reads show durable in-flight or failed model state; refreshing the page does not dispatch a call or admit work. Admission is a separate explicit action after triage and still does not authorize execution.
 
+M8 begins by moving repository enrollment out of runtime source configuration. Migration 47 imports the three reviewed declarations once into a durable, versioned SQLite registry with append-only actor/reason evidence, optimistic concurrency, idempotency, immutable GitHub repository identity, and digest-verified policy reads. The Access surface performs a separate bounded metadata-only drift check against each durable record. GitHub discovery and authenticated enrollment/disable actions remain the next boundary; the observation route cannot mutate policy or create work.
+
 See [ROADMAP.md](./ROADMAP.md) for durable milestone status and [docs/architecture.md](./docs/architecture.md) for the control-plane design, including multi-repository change sets.
 
 ## Requirements
