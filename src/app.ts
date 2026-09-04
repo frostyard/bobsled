@@ -59,6 +59,7 @@ import {
 	PublicationPolicyBlockedError,
 	PublicationUpstreamError,
 } from './control-plane/publication-service.ts';
+import { PublicationWebhookReconciler } from './control-plane/publication-webhook-reconciler.ts';
 import {
 	publicationRebases,
 	PublicationRebaseConflictError,
@@ -177,7 +178,11 @@ app.route('/agents/copilot', createAgentRouter(CopilotAgent));
 
 const githubWebhookSecret = process.env.BOBSLED_GITHUB_WEBHOOK_SECRET;
 if (githubWebhookSecret) {
-	const githubIngress = createBobsledGitHubChannel({ webhookSecret: githubWebhookSecret });
+	const publicationWebhookReconciler = new PublicationWebhookReconciler(githubEventStore, draftPublications);
+	const githubIngress = createBobsledGitHubChannel({
+		webhookSecret: githubWebhookSecret,
+		onRecorded: async (delivery) => { await publicationWebhookReconciler.reconcile(delivery); },
+	});
 	app.use('/channels/github/webhook', githubIngress.captureExactBody);
 	app.route('/channels/github', githubIngress.channel.route());
 } else {

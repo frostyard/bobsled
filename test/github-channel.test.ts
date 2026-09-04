@@ -99,3 +99,28 @@ test('the shared body limit bounds both evidence capture and Flue ingress', asyn
 		store.close();
 	}
 });
+
+test('a duplicate delivery retries post-admission reconciliation without duplicating storage', async () => {
+	const store = new GitHubEventStore(':memory:', () => new Date('2026-09-02T01:00:00.000Z'));
+	let attempts = 0;
+	const ingress = createBobsledGitHubChannel({
+		webhookSecret: secret,
+		store,
+		onRecorded: async () => {
+			attempts += 1;
+			if (attempts === 1) throw new Error('simulated post-admission interruption');
+		},
+	});
+	const app = new Hono();
+	app.use('/channels/github/webhook', ingress.captureExactBody);
+	app.route('/channels/github', ingress.channel.route());
+	const body = JSON.stringify({ action: 'completed', repository: { id: 7, full_name: 'frostyard/clix' }, check_run: { head_sha: 'a'.repeat(40) } });
+	try {
+		assert.equal((await app.request(signedRequest(body, 'retry-reconciliation', 'check_run'))).status, 500);
+		const recovered = await app.request(signedRequest(body, 'retry-reconciliation', 'check_run'));
+		assert.equal(recovered.status, 202);
+		assert.equal((await recovered.json() as { duplicate: boolean }).duplicate, true);
+		assert.equal(attempts, 2);
+		assert.equal(store.metrics().total, 1);
+	} finally { store.close(); }
+});

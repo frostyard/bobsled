@@ -10,7 +10,7 @@ Start with:
 
 - Repository metadata: read (implicit GitHub App baseline).
 - Issues: read and write, for policy-controlled labels and comments.
-- Webhook events: issues, issue comments, installation, and installation repositories.
+- Webhook events: issues, issue comments, pull requests, and check runs. GitHub delivers installation and installation-repository lifecycle events automatically.
 
 Do not grant Contents, Pull requests, Workflows, Administration, Actions, or Checks write access in M2. Add capabilities when a milestone needs them:
 
@@ -53,7 +53,7 @@ The authenticated operator interface compares the latest verified installation s
 
 Prefer `BOBSLED_GITHUB_PRIVATE_KEY_FILE` over inline `BOBSLED_GITHUB_PRIVATE_KEY` in deployed services. Store the complete downloaded PEM as a separate root-owned file readable by the service group. A configured file path is authoritative and fails closed when unreadable; Bobsled never falls back to stale inline key material. This avoids dotenv quoting errors and prevents systemd from treating PEM continuation lines as separate environment assignments.
 
-The receiver is implemented at `POST /channels/github/webhook` but stays unavailable until `BOBSLED_GITHUB_WEBHOOK_SECRET` is supplied through protected deployment configuration. The official `@flue/github` channel owns JSON admission, exact-byte HMAC verification, GitHub event typing, and ping acknowledgement. A bounded project-owned wrapper retains the same exact bytes and atomically claims the verified delivery in Bobsled's store. Unknown valid event names are recorded with `ignored` status so GitHub can evolve without causing retries or accidental execution. No admitted webhook currently dispatches an agent or performs a GitHub write.
+The receiver is implemented at `POST /channels/github/webhook` but stays unavailable until `BOBSLED_GITHUB_WEBHOOK_SECRET` is supplied through protected deployment configuration. The official `@flue/github` channel owns JSON admission, exact-byte HMAC verification, GitHub event typing, and ping acknowledgement. A bounded project-owned wrapper retains the same exact bytes and atomically claims the verified delivery in Bobsled's store. Unknown valid event names are recorded with `ignored` status so GitHub can evolve without causing retries or accidental execution. Signed `check_run` and `pull_request` deliveries may trigger the existing read-only publication lifecycle reconciliation after durable admission. The exact PR number, URL, branch, commit, base, and marker are still re-read through narrowly scoped installation authority before status changes. A post-admission failure returns an error so exact delivery redelivery can retry the idempotent read. No admitted webhook dispatches an agent, creates a publication, writes GitHub, or gains merge authority.
 
 The generated blueprint's single `GITHUB_TOKEN` and direct comment tool are intentionally not used. Outbound authority remains the repository-ID-scoped GitHub App broker and durable action outbox described below.
 

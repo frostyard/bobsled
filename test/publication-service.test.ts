@@ -114,11 +114,15 @@ test('publishes only a generated non-force branch and draft PR, then waits for r
 		const pullCall = calls.find(({ path, method }) => path.endsWith('/pulls') && method === 'POST');
 		assert.deepEqual(pullCall?.body && { draft: (pullCall.body as { draft: boolean }).draft, head: (pullCall.body as { head: string }).head }, { draft: true, head: record.branchName });
 		assert.equal(calls.some(({ body }) => body && (body as { force?: boolean }).force === true), false);
-		const ready = await publications.refreshChecks(record.id, owner);
+		const [ready] = await publications.refreshMatchingWebhook({ repositoryId: 'frostyard/clix', commitSha });
+		assert.ok(ready);
 		assert.equal(ready.status, 'ready_for_human');
 		assert.equal(ready.pullState, 'open');
+		assert.deepEqual(await publications.refreshMatchingWebhook({ repositoryId: 'frostyard/clix', commitSha: 'f'.repeat(40) }), []);
+		await assert.rejects(publications.refreshMatchingWebhook({ repositoryId: 'frostyard/clix' }), PublicationConflictError);
 		mergedAt = '2026-09-02T04:30:00.000Z';
-		const merged = await publications.refreshChecks(record.id, owner);
+		const [merged] = await publications.refreshMatchingWebhook({ repositoryId: 'frostyard/clix', pullNumber: 42 });
+		assert.ok(merged);
 		assert.equal(merged.status, 'merged');
 		assert.equal(merged.pullMergedAt, mergedAt);
 		assert.deepEqual(uses, ['draft_pr_publish', 'pull_request_status_read', 'commit_checks_read', 'pull_request_status_read']);

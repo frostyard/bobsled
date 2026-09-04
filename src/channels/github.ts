@@ -3,6 +3,7 @@ import type { MiddlewareHandler } from 'hono';
 import {
 	githubEventStore,
 	type GitHubEventStore,
+	type RecordedWebhook,
 	WebhookConflictError,
 	WebhookForbiddenError,
 	WebhookPayloadError,
@@ -51,6 +52,7 @@ export function createBobsledGitHubChannel(options: {
 	webhookSecret: string;
 	store?: GitHubEventStore;
 	bodyLimit?: number;
+	onRecorded?: (delivery: RecordedWebhook) => Promise<void>;
 }) {
 	const store = options.store ?? githubEventStore;
 	const bodyLimit = options.bodyLimit ?? GITHUB_WEBHOOK_BODY_LIMIT;
@@ -69,6 +71,7 @@ export function createBobsledGitHubChannel(options: {
 					payload,
 					decodedPayload: delivery.payload,
 				});
+				await options.onRecorded?.(recorded);
 				return Response.json(recorded, { status: 202 });
 			} catch (error) {
 				return webhookError(error);

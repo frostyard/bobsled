@@ -65,7 +65,7 @@ A card is in `delivery` when either:
 - its latest review is `approved` and no publication record exists yet; or
 - its publication is `pending`, `running`, `published`, `checks_pending`, or `ready_for_human`.
 
-Depending on the exact phase, the card may offer **Prepare draft PR**, **Open it on GitHub**, **Check again**, or **Open the draft PR**. **Check again** first verifies the recorded pull request's immutable number, URL, branch, commit, base, and Bobsled marker, then reconciles its open/closed/merged lifecycle and required checks. `ready_for_human` means Bobsled's required checks passed; Bobsled still cannot merge.
+Depending on the exact phase, the card may offer **Prepare draft PR**, **Open it on GitHub**, **Check again**, or **Open the draft PR**. Signed pull-request and check-run webhooks normally invoke the same lifecycle reconciliation automatically. **Check again** remains the explicit recovery path when a delivery is delayed or unavailable. Both paths first verify the recorded pull request's immutable number, URL, branch, commit, base, and Bobsled marker, then reconcile its open/closed/merged lifecycle and required checks. `ready_for_human` means Bobsled's required checks passed; Bobsled still cannot merge.
 
 An approved stale-base review enters `delivery` with **Prepare draft PR**. That action creates a new immutable pending publication linked to the original blocked publication; **Open it on GitHub** remains a separate explicit action.
 
