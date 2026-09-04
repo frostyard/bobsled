@@ -16,6 +16,6 @@ The projection also includes a SHA-256 fingerprint of the complete declared repo
 
 `aligned` means every observed field matches the declaration. `drifted` names the mismatched fields. `unavailable` means installation authority, GitHub access, or a valid metadata response was unavailable; it does not guess that the repository is healthy.
 
-Each observation is bound to the exact retained enrollment version and policy digest. The current projection also counts open, non-archived runs whose immutable policy snapshot differs from the current enrollment and exposes at most 20 run IDs for inspection. Historical, terminal, or archived work does not create current policy-impact noise.
+Each observation is bound to the exact retained enrollment version and policy digest. The current projection also counts open, non-archived runs whose immutable policy snapshot differs from the current enrollment and exposes at most 20 run IDs for inspection. Merged or closed publications, resolved stale-publication supersessions, verified no-change outcomes, and archived work do not create current policy-impact noise.
 
 This check does not enroll, disable, rename, or otherwise mutate a repository. It creates no run, workspace, model call, scheduler claim, policy update, or GitHub write. Repository management is a separate confirmed Access-surface workflow: discovery and identity come from GitHub, policy comes from `.bobsled/repository.json`, and enroll/disable/re-enable actions append versioned registry evidence. Remediation of detected drift remains an explicit later action.

@@ -226,6 +226,8 @@ Operator-managed enrollment uses installation-wide `metadata:read` only to enume
 
 Migration 48 makes drift evidence explicit and durable. Loading Access reads only the latest retained observations. **Check repository drift** performs bounded, sequential metadata reads and atomically appends one observation per enabled repository, bound to its exact enrollment version and policy digest. Historical observations remain verifiable against their retained enrollment event. The projection separately reports open, non-archived runs whose immutable policy snapshot differs from current enrollment; it does not rewrite, cancel, retry, or silently upgrade those runs.
 
+Live migration-48 acceptance found three policy-old website parents whose delivery was already terminal. The impact projection now follows operator-actionable lifecycle truth: merged or closed publications, explicitly resolved stale-publication supersessions, verified no-change outcomes, and archived runs are excluded without changing their retained evidence.
+
 ## Current safety boundary
 
 - Public ingress is bounded by Frostyard GitHub operator authentication and verified webhooks; event-triggered dispatch remains disabled, and GitHub mutations require explicit enrolled policy plus the durable action outbox.
