@@ -204,6 +204,8 @@ A delivery ID is admitted once; replaying the same bytes is harmless, while reus
 
 The durable delivery row retains the exact verified bytes and a SHA-256 digest. This allows later asynchronous routing without relying on an in-memory request. Recognized event families are accepted for future processing; unknown but valid event names are retained as ignored rather than discarded. Installation payloads append an effective-permission snapshot. Admission does not dispatch an agent or mutate GitHub. Outbound operations do not use the channel blueprint's global token example; they continue through Bobsled's scoped installation broker and typed action outbox.
 
+Signed `check_run` and `pull_request` events are the first non-agentic routing consumers. After exact-byte verification and durable admission, trusted code reconstructs only repository, commit, and pull-number signals from the retained payload and matches at most twenty active publication records. The existing lifecycle method then re-reads each exact PR and its checks through separate read-only capability profiles before changing local status. Delivery replay may repeat these idempotent reads after a post-admission interruption; it cannot publish, modify a branch or PR, dispatch a model, or merge. Manual **Check again** remains available when GitHub delivery is delayed or disabled.
+
 ## Operator identity and GitHub authority
 
 Local private operation keeps the reversible `local_trusted` principal. When `BOBSLED_OPERATOR_AUTH_MODE=github`, incomplete configuration fails protected routes closed. A complete configuration enables a GitHub App web authorization flow with:

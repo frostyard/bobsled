@@ -90,6 +90,12 @@ export interface DraftPublicationServiceOptions {
 	workspaceInspector?: WorkspaceInspector;
 }
 
+export interface PublicationWebhookSignal {
+	repositoryId: string;
+	commitSha?: string;
+	pullNumber?: number;
+}
+
 const GitRefSchema = v.object({ object: v.object({ sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/)) }) });
 const BlobSchema = v.object({ sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/)) });
 const TreeSchema = v.object({ sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/)) });
@@ -464,6 +470,26 @@ export class DraftPublicationService {
 		this.#db.prepare('UPDATE draft_publications SET status = ?, pull_state = ?, pull_draft = ?, pull_merged_at = ?, pull_closed_at = ?, pull_url = ?, checks_json = ?, updated_at = ? WHERE id = ?')
 			.run(status, ...lifecycle, json(checks), this.#now().toISOString(), id);
 		return this.get(id, principal);
+	}
+
+	async refreshMatchingWebhook(signal: PublicationWebhookSignal): Promise<DraftPublicationRecord[]> {
+		if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(signal.repositoryId)
+			|| (signal.commitSha !== undefined && !/^[0-9a-f]{40}$/.test(signal.commitSha))
+			|| (signal.pullNumber !== undefined && (!Number.isInteger(signal.pullNumber) || signal.pullNumber < 1))
+			|| (signal.commitSha === undefined && signal.pullNumber === undefined)) {
+			throw new PublicationConflictError('Webhook publication signal is invalid');
+		}
+		const rows = this.#db.prepare(`SELECT id, owner_id FROM draft_publications
+			WHERE repository_id = ? AND status IN ('published','checks_pending','checks_failed','ready_for_human','closed')
+			AND ((? IS NOT NULL AND commit_sha = ?) OR (? IS NOT NULL AND pull_number = ?))
+			ORDER BY created_at ASC LIMIT 21`).all(
+			signal.repositoryId, signal.commitSha ?? null, signal.commitSha ?? null,
+			signal.pullNumber ?? null, signal.pullNumber ?? null,
+		) as Array<{ id: string; owner_id: string }>;
+		if (rows.length > 20) throw new PublicationConflictError('Webhook publication signal matched too many records');
+		const refreshed: DraftPublicationRecord[] = [];
+		for (const row of rows) refreshed.push(await this.refreshChecks(row.id, { id: row.owner_id }));
+		return refreshed;
 	}
 
 	#candidateFromLedger(ledger: JobLedger, request: DraftPublicationRequest, principal: Principal): PublicationCandidate {

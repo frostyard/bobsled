@@ -6,7 +6,7 @@ import * as v from 'valibot';
 import { dataPath } from '../paths.ts';
 
 const MAX_WEBHOOK_BYTES = 5 * 1024 * 1024;
-const acceptedEvents = new Set(['ping', 'installation', 'installation_repositories', 'issues', 'issue_comment']);
+const acceptedEvents = new Set(['ping', 'installation', 'installation_repositories', 'issues', 'issue_comment', 'pull_request', 'check_run']);
 
 const WebhookEnvelopeSchema = v.looseObject({
 	action: v.optional(v.string()),
