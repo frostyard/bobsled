@@ -167,9 +167,16 @@ function markSeen() {
 /* ---------- desktop notification ---------- */
 
 const notifiedFor = new Set();
+const activeNotifications = new Map();
 let notificationsSeeded = false;
 function notifyAttention() {
   const stuck = state.cards.filter((card) => card.lane === 'attention');
+  const stuckIds = new Set(stuck.map((card) => card.id));
+  for (const [runId, note] of activeNotifications) {
+    if (stuckIds.has(runId)) continue;
+    try { note.close(); } catch { /* notification cleanup is best effort */ }
+    activeNotifications.delete(runId);
+  }
   // The first board load of a session records what is already stuck without
   // announcing it. You only get told about things that stop while you are away.
   if (!notificationsSeeded) {
@@ -183,7 +190,11 @@ function notifyAttention() {
     if (notifiedFor.has(key)) continue;
     notifiedFor.add(key);
     try {
+      const prior = activeNotifications.get(card.id);
+      if (prior) prior.close();
       const note = new Notification('Bobsled needs you', { body: card.title + ' — ' + card.phase, tag: card.id });
+      activeNotifications.set(card.id, note);
+      note.addEventListener('close', () => { if (activeNotifications.get(card.id) === note) activeNotifications.delete(card.id); });
       note.addEventListener('click', () => { window.focus(); navigate('/runs/' + card.id); });
     } catch { /* notifications are a convenience, never a dependency */ }
   }

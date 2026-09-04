@@ -82,13 +82,15 @@ A card is in `attention` when a human decision or recovery path is required. Qua
 - any other blocked implementation attempt.
 - a linked multi-worker plan whose dependency chain, attempt allowance, provider-call allowance, or wall-clock budget is terminally exhausted.
 
-The card exposes only a valid recovery action. A permanent policy block links to the run page instead of a retry button that would repeat known-futile work.
+The card exposes only valid recovery actions. Every terminal card in this lane also offers **Archive**. Archiving is an append-only operator decision: it moves the card to Done and suppresses browser notifications without deleting or rewriting the run, attempt, review, artifact, publication, or audit evidence. Active work cannot be archived. A permanent policy block links to the run page instead of a retry button that would repeat known-futile work.
 
 ### Done (lane id `history`)
 
 A publication enters `history` after GitHub reports that its exact recorded pull request was merged or closed without merge. A merged record is terminal and exposes only **Open the PR**. A closed-without-merge record retains **Check again**, because GitHub permits reopening; if reopened, its latest check state places it back in `delivery` or `attention`.
 
 A side-effect-free stale publication may also enter `history` through an immutable **Already shipped another way** decision after its zero-model replay retains an exact patch conflict and a later merged publication matches the repository and task title. The old publication and replay stay unchanged; the resolution performs no model call or GitHub mutation and links the later merged pull request.
+
+An archived terminal run appears here with **Restore to the board**. Restoring appends another operator decision and removes only the archive overlay, so the card returns to the lane implied by its unchanged workflow evidence. Archive and restore never start work, call a model, or touch GitHub.
 
 ## Multi-worker evidence
 

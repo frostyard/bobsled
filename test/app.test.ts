@@ -127,6 +127,44 @@ test('serves a typed operator board projection', async () => {
 	assert.equal(Array.isArray(board.cards), true);
 });
 
+test('archives and restores terminal runs through authenticated control-plane routes', async () => {
+	const key = `archive-route-${randomUUID()}`;
+	const admitted = await app.request('/api/runs', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', 'idempotency-key': key },
+		body: JSON.stringify({
+			repositoryId: 'frostyard/clix',
+			workItem: { source: 'manual', key, title: 'Retire a test fixture', body: 'Keep the evidence without operator noise.', labels: [] },
+			triageDecision: {
+				route: 'needs_spec', risk: 'low', confidence: 0.9,
+				summary: 'Fixture is intentionally blocked.', rationale: 'It exists to prove archive routing.',
+				acceptanceCriteria: ['Archive it.'], missingInformation: ['No implementation is intended.'],
+				suggestedLabels: ['bobsled:needs-spec'], eligibleForOneClick: false,
+			},
+		}),
+	});
+	assert.equal(admitted.status, 201);
+	const run = await admitted.json() as { id: string; version: number };
+	const archivedResponse = await app.request(`/api/runs/${run.id}/archive`, {
+		method: 'POST', headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ expectedVersion: run.version, reason: 'Retire this route fixture.' }),
+	});
+	assert.equal(archivedResponse.status, 200);
+	const archived = await archivedResponse.json() as { version: number; archive?: { reason: string } };
+	assert.equal(archived.archive?.reason, 'Retire this route fixture.');
+	const board = await (await app.request('/api/operator-board')).json() as { cards: Array<{ id: string; lane: string; phase: string }> };
+	const card = board.cards.find(({ id }) => id === run.id);
+	assert.equal(card?.lane, 'history');
+	assert.equal(card?.phase, 'archived');
+
+	const restoredResponse = await app.request(`/api/runs/${run.id}/restore`, {
+		method: 'POST', headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ expectedVersion: archived.version, reason: 'Restore this route fixture.' }),
+	});
+	assert.equal(restoredResponse.status, 200);
+	assert.equal((await restoredResponse.json() as { archive?: unknown }).archive, undefined);
+});
+
 test('serves principal-owned conversational intake without implicit model authority', async () => {
 	const key = `app-conversation-${crypto.randomUUID()}`;
 	const seed = { source:'manual', key, title:'Clarify one bounded website task', body:'Preserve the existing layout.', labels:[] };

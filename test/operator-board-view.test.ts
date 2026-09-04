@@ -35,7 +35,27 @@ test('human-gated work is attention, while cancelled work moves to history', () 
 		const view = projectOperatorBoard([blocked, cancelled], [], new Date('2026-09-02T16:01:00.000Z'));
 		assert.equal(view.cards.find(({ id }) => id === blocked.id)?.lane, 'attention');
 		assert.equal(view.cards.find(({ id }) => id === blocked.id)?.actions[0]?.kind, 'human_override');
+		assert.equal(view.cards.find(({ id }) => id === blocked.id)?.actions.at(-1)?.kind, 'archive');
 		assert.equal(view.cards.find(({ id }) => id === cancelled.id)?.lane, 'history');
+	} finally { ledger.close(); }
+});
+
+test('archive is a reversible History overlay that suppresses attention state', () => {
+	let tick = 0;
+	const ledger = new JobLedger(':memory:', () => new Date(`2026-09-02T16:00:0${tick++}.000Z`));
+	try {
+		const blocked = ledger.admit({ repositoryId: 'frostyard/clix', workItem, triageDecision: needsSpec }, principal, 'archive-overlay');
+		const archived = ledger.archive(blocked.id, { expectedVersion: blocked.version, reason: 'Testing is complete.' }, principal);
+		const card = projectRunForBoard(archived);
+		assert.equal(card.lane, 'history');
+		assert.equal(card.phase, 'archived');
+		assert.match(card.summary, /will not ask for attention or send notifications/);
+		assert.deepEqual(card.actions.map(({ kind }) => kind), ['restore']);
+
+		const restored = ledger.restore(blocked.id, { expectedVersion: archived.version, reason: 'Revisit it.' }, principal);
+		const restoredCard = projectRunForBoard(restored);
+		assert.equal(restoredCard.lane, 'attention');
+		assert.equal(restoredCard.actions.at(-1)?.kind, 'archive');
 	} finally { ledger.close(); }
 });
 

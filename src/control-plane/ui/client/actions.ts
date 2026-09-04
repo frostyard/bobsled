@@ -63,6 +63,12 @@ async function runAction(card, action) {
     } else if (action.kind === 'cancel') {
       await post('/api/runs/' + run.id + '/cancel', { reason, expectedVersion: run.version }, false);
       toast('Dropped.', { detail: 'Everything it produced is kept.' });
+	} else if (action.kind === 'archive') {
+		await post('/api/runs/' + run.id + '/archive', { reason, expectedVersion: run.version }, false);
+		toast('Archived.', { detail: 'It moved to Done and will no longer notify you.' });
+	} else if (action.kind === 'restore') {
+		await post('/api/runs/' + run.id + '/restore', { reason, expectedVersion: run.version }, false);
+		toast('Restored.', { detail: 'Its current workflow state is visible on the board again.' });
     } else if (action.kind === 'supersede') {
       const admitted = await post('/api/runs', { repositoryId: card.repositoryId, workItem: job.workItemSnapshot, triageDecision: job.triageDecision, supersedesRunId: run.id });
       toast('Queued a new run.', { detail: 'It is waiting in Ready.', action: 'Open it', href: '/runs/' + admitted.id });

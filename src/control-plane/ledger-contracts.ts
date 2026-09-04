@@ -28,6 +28,22 @@ export const CancelRunRequestSchema = v.object({
 	expectedVersion: v.pipe(v.number(), v.integer(), v.minValue(1)),
 });
 
+export const ArchiveRunRequestSchema = v.object({
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
+	expectedVersion: v.pipe(v.number(), v.integer(), v.minValue(1)),
+});
+
+export const RestoreRunRequestSchema = v.object({
+	reason: v.pipe(v.string(), v.minLength(1), v.maxLength(2_000)),
+	expectedVersion: v.pipe(v.number(), v.integer(), v.minValue(1)),
+});
+
+export const RunArchiveRecordSchema = v.object({
+	actorId: v.pipe(v.string(), v.minLength(1)),
+	reason: v.pipe(v.string(), v.minLength(1)),
+	archivedAt: v.string(),
+});
+
 export const AuditEventSchema = v.object({
 	sequence: v.pipe(v.number(), v.integer()),
 	id: v.pipe(v.string(), v.uuid()),
@@ -105,6 +121,7 @@ export const RunRecordSchema = v.object({
 	id: v.pipe(v.string(), v.uuid()),
 	ownerId: v.pipe(v.string(), v.minLength(1)),
 	status: RunStatusSchema,
+	archive: v.optional(RunArchiveRecordSchema),
 	supersedesRunId: v.optional(v.pipe(v.string(), v.uuid())),
 	version: v.pipe(v.number(), v.integer(), v.minValue(1)),
 	createdAt: v.string(),
@@ -117,6 +134,9 @@ export const RunRecordSchema = v.object({
 export type AdmitRunRequest = v.InferOutput<typeof AdmitRunRequestSchema>;
 export type HumanOverrideRequest = v.InferOutput<typeof HumanOverrideRequestSchema>;
 export type CancelRunRequest = v.InferOutput<typeof CancelRunRequestSchema>;
+export type ArchiveRunRequest = v.InferOutput<typeof ArchiveRunRequestSchema>;
+export type RestoreRunRequest = v.InferOutput<typeof RestoreRunRequestSchema>;
+export type RunArchiveRecord = v.InferOutput<typeof RunArchiveRecordSchema>;
 export type RunRecord = v.InferOutput<typeof RunRecordSchema>;
 export type JobRecord = v.InferOutput<typeof JobRecordSchema>;
 export type AttemptRecord = v.InferOutput<typeof AttemptRecordSchema>;
