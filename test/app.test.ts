@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import vm from 'node:vm';
@@ -87,6 +88,35 @@ test('never lets an operator login break out of the client module', () => {
 	const html = controlPlaneHtml({ provider: 'github', login: '</script><img src=x onerror=alert(1)>' });
 	assert.doesNotMatch(html, /<\/script><img/);
 	assert.match(html, /\\u003c\/script>/);
+});
+
+test('exposes read-only live agent activity for a run and nothing for an unknown one', async () => {
+	const admitted = await app.request('/api/runs', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', 'idempotency-key': `activity-${randomUUID()}` },
+		body: JSON.stringify({
+			repositoryId: 'frostyard/clix',
+			workItem: { source: 'manual', key: 'manual:activity', title: 'Watchable work', body: 'Body.', labels: [] },
+			triageDecision: {
+				route: 'ready_for_agent', risk: 'low', confidence: 0.9,
+				summary: 'Small change.', rationale: 'Explicit and bounded.',
+				acceptanceCriteria: ['It works'], missingInformation: [],
+				suggestedLabels: ['bobsled:ready'], eligibleForOneClick: true,
+			},
+		}),
+	});
+	assert.equal(admitted.status, 201);
+	const run = await admitted.json() as { id: string };
+
+	const activity = await app.request(`/api/runs/${run.id}/activity`);
+	assert.equal(activity.status, 200);
+	const payload = await activity.json() as { runId: string; events: unknown[] };
+	assert.equal(payload.runId, run.id);
+	// Nothing has run yet, so there is nothing to watch -- but the route must
+	// answer rather than fail, and it must never start anything.
+	assert.deepEqual(payload.events, []);
+	assert.equal((await app.request(`/api/runs/${run.id}`)).status, 200);
+	assert.equal((await app.request('/api/runs/00000000-0000-4000-8000-000000000000/activity')).status, 404);
 });
 
 test('serves a typed operator board projection', async () => {

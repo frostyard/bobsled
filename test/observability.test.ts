@@ -62,3 +62,41 @@ test('diagnostic JSON preserves cycles, undefined values, and bigint markers', (
 		self: { $ref: '$' },
 	});
 });
+
+test('reads back one run\'s agent work by conversation prefix without exposing anything else', () => {
+	const directory = mkdtempSync(join(tmpdir(), 'bobsled-activity-'));
+	const path = join(directory, 'telemetry.db');
+	const at = '2026-09-01T12:00:00.000Z';
+	const event = (index: number, conversationId: string, extra: Record<string, unknown> = {}) => ({
+		v: 3, eventIndex: index, timestamp: at, type: 'tool_start',
+		toolName: 'read', toolCallId: 'tool-' + index, instanceId: 'instance-1',
+		conversationId, origin: 'model', description: 'Read a file', args: { path: 'src/a.ts' },
+		...extra,
+	}) as FlueObservation;
+	try {
+		const store = new FlueObservationStore(path, () => new Date(at), 'process-1');
+		const context = { id: 'instance-1', agentName: 'implementation-worker' };
+		store.record(event(1, 'implementation-attempt-1'), context);
+		store.record(event(2, 'review-review-1-1-abc'), context);
+		store.record(event(3, 'remediation-review-1-xyz'), context);
+		store.record(event(4, 'implementation-attempt-OTHER'), context);
+		// A conversation belonging to an unrelated run must never come back.
+		store.record(event(5, 'triage-unrelated'), context);
+
+		const mine = store.activity(['implementation-attempt-1', 'review-review-1-', 'remediation-review-1-']);
+		assert.deepEqual(mine.map((entry) => entry.conversationId), [
+			'implementation-attempt-1', 'review-review-1-1-abc', 'remediation-review-1-xyz',
+		]);
+		assert.equal(mine[0]?.type, 'tool_start');
+		assert.deepEqual(mine[0]?.payload.args, { path: 'src/a.ts' });
+
+		// Paging by id is how the live view avoids re-reading what it has shown.
+		assert.deepEqual(store.activity(['implementation-attempt-1'], mine[0]!.id).length, 0);
+		assert.deepEqual(store.activity([]).length, 0);
+		// A prefix must not be readable as a LIKE pattern.
+		assert.deepEqual(store.activity(['%']).length, 0);
+		store.close();
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});

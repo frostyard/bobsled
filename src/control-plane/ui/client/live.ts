@@ -120,8 +120,9 @@ async function liveSurface(surface, params) {
   let after = 0;
   let timer;
   let stopped = false;
-  const started = Date.parse(card.updatedAt) || Date.now();
+  const startedAt = Date.parse(card.updatedAt) || Date.now();
   const seen = new Set();
+  paintFiles(seen);
 
   const tick = async () => {
     if (stopped) return;
@@ -139,17 +140,24 @@ async function liveSurface(surface, params) {
         paintFiles(seen);
       }
       if (!stream.childElementCount) {
+        const current = state.cards.find((entry) => entry.id === runId) || card;
         clear(stream).append(el('div', { class: 'center-note' }, [
-          el('h2', { text: 'Nothing recorded yet.' }),
-          el('p', { text: 'Steps appear here as the agent takes them.' }),
+          el('h2', { text: current.lane === 'ready' ? 'This has not started yet.' : 'Nothing was recorded.' }),
+          el('p', { text: current.lane === 'ready' ? 'Start the work and every step it takes will appear here.' : 'Steps appear here as the agent takes them.' }),
         ]));
       }
-      const live = ['working', 'review'].includes((state.cards.find((entry) => entry.id === runId) || card).lane);
+      const current = state.cards.find((entry) => entry.id === runId) || card;
+      const live = ['working', 'review'].includes(current.lane);
+      const started = current.lane !== 'ready';
       dot.dataset.idle = String(!live);
-      label.textContent = live ? 'Watching ' + agentLabelFor(payload) : 'Finished';
+      label.textContent = live ? 'Watching ' + agentLabelFor(payload)
+        : started ? 'Finished'
+        : 'Not started yet';
       stopButton.disabled = !live;
       const elapsed = document.querySelector('#live-elapsed');
-      if (elapsed) elapsed.textContent = duration(Date.now() - started);
+      // Elapsed time only means something while work is running; before that,
+      // the honest number is how long it has been sitting there.
+      if (elapsed) elapsed.textContent = live ? duration(Date.now() - startedAt) : ago(current.updatedAt);
       if (!live && payload.events.length === 0) { stopped = true; return; }
     } catch (error) {
       label.textContent = 'Lost the connection';
