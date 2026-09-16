@@ -37,7 +37,7 @@
 		"@octokit/auth-app": "^8.3.1",
 		"better-sqlite3": "^13.0.3",
 		"hono": "^4.7.0",
-		"mise": "^2026.9.0",
+		"mise": "^2026.9.6",
 		"proper-lockfile": "^4.1.2",
 		"tsx": "^4.23.13",
 		"valibot": "^1.4.2"
